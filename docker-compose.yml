@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: logfy-postgres
+    environment:
+      POSTGRES_USER: usr_logfy
+      POSTGRES_PASSWORD: usr_logfy
+      POSTGRES_DB: db_logfy
+    ports:
+      - "5432:5432"
+    volumes:
+      - logfy_postgres_data:/var/lib/postgresql/data
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usr_logfy -d db_logfy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  logfy_postgres_data:
