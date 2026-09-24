@@ -14,7 +14,6 @@ for (const operation of ['create', 'update'] as const) {
     : repository.update('account-id', { slug: 'reserved' });
 
   test(`${operation}: a database uniqueness conflict returns 409`, async (t) => {
-    // Adapter metadata from the reported failure: no meta.target is provided.
     const error = new Prisma.PrismaClientKnownRequestError('Duplicate slug', {
       code: 'P2002',
       clientVersion: '7.10.0',

@@ -22,7 +22,9 @@ model Account {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  apikeys ApiKey[]
+  apikeys    ApiKey[]
+  routePlans RoutePlan[]
+  vehicles   Vehicle[]
 
   @@index([status])
   @@map("accounts")
@@ -52,4 +54,73 @@ model ApiKey {
   @@index([prefix])
   @@index([revokedAt])
   @@map("api_keys")
+}
+
+enum RoutePlanStatus {
+  DRAFT
+  OPTIMIZED
+}
+
+model RoutePlan {
+  id             String             @id @default(cuid())
+  accountId      String
+  account        Account            @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name           String
+  depotLatitude  Float
+  depotLongitude Float
+  status         RoutePlanStatus    @default(DRAFT)
+  version        Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  deliveries     Delivery[]
+  optimization   RouteOptimization?
+
+  @@unique([id, accountId])
+  @@index([accountId, createdAt])
+  @@map("route_plans")
+}
+
+model Delivery {
+  id                     String    @id @default(cuid())
+  accountId              String
+  routePlanId            String
+  routePlan              RoutePlan @relation(fields: [routePlanId, accountId], references: [id, accountId], onDelete: Cascade)
+  reference              String
+  latitude               Float
+  longitude              Float
+  demand                 Int
+  serviceDurationSeconds Int       @default(0)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@unique([routePlanId, reference])
+  @@index([accountId, routePlanId])
+  @@map("deliveries")
+}
+
+model Vehicle {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name      String
+  capacity  Int
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId, active])
+  @@map("vehicles")
+}
+
+model RouteOptimization {
+  id          String    @id @default(cuid())
+  accountId   String
+  routePlanId String    @unique
+  routePlan   RoutePlan @relation(fields: [routePlanId, accountId], references: [id, accountId], onDelete: Cascade)
+  result      Json
+  createdAt   DateTime  @default(now())
+
+  @@unique([routePlanId, accountId])
+  @@index([accountId])
+  @@map("route_optimizations")
 }

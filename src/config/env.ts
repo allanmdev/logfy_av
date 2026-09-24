@@ -16,7 +16,12 @@ const envSchema = z.object({
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
     .default('info'),
 
-    DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  ADMIN_API_KEY: z.string().min(32).optional(),
+  GOOGLE_MAPS_API_KEY: z.string().min(1).optional(),
+  GOOGLE_MAPS_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(10000),
+  ROUTING_MAX_DELIVERIES: z.coerce.number().int().min(1).max(500).default(100),
+
+  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 });
 
 const parsed = envSchema.safeParse(process.env);
