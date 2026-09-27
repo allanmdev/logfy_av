@@ -9,16 +9,6 @@ import { apiKeyRouter } from '../../modules/api-keys/presentation/http/api-key.r
 
 export const apiRouter = Router();
 
-apiRouter.get('/health', (_req, res) => {
-  return res.status(200).json({
-    data: {
-      service: 'logfy-api',
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-    },
-  });
-});
-
 apiRouter.use('/accounts/:accountId/api-keys', requireAdmin, apiKeyRouter);
 apiRouter.use('/accounts', requireAdmin, accountRouter);
 

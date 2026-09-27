@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: usr_logfy
       POSTGRES_DB: db_logfy
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - logfy_postgres_data:/var/lib/postgresql/data
     
@@ -17,5 +17,22 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - logfy_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   logfy_postgres_data:
+  logfy_redis_data:

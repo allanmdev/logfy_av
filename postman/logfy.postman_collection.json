@@ -1,0 +1,1321 @@
+{
+  "info": {
+    "name": "Logfy API · Todos os endpoints",
+    "description": "27 endpoints da aplicação. Importe também o ambiente local, preencha adminKey e execute as pastas em ordem. IDs e apiKey são capturados automaticamente em variáveis da coleção. A pasta de otimização faz chamadas reais ao Google; a pasta de limpeza exclui os dados criados. Base URL inclui /v1. Corpos de roteirização rejeitam campos desconhecidos e não aceitam accountId.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/v1",
+      "type": "string"
+    },
+    {
+      "key": "adminKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKeyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "vehicleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "routePlanId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "deliveryId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 · Saúde",
+      "item": [
+        {
+          "name": "Verificar saúde da API",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Endpoint público. Retorna serviço, status e timestamp.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 · Contas (administração)",
+      "item": [
+        {
+          "name": "Criar conta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts"
+              ]
+            },
+            "description": "name: 2–150 caracteres; slug: 2–100 caracteres, letras minúsculas, números e hífens. O GUID evita colisões entre execuções. Captura accountId.\n\nStatus esperado: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Transportadora Teste\",\n  \"slug\": \"transportadora-{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set(\"accountId\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Listar contas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts?page=1&limit=20&deleted=false",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Página, inteiro positivo. Padrão: 1."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Itens por página: 1 a 100. Padrão: 20."
+                },
+                {
+                  "key": "deleted",
+                  "value": "false",
+                  "description": "false: não excluídas; true: excluídas; all: todas (padrão)."
+                }
+              ]
+            },
+            "description": "Retorna { data, total }.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Consultar conta",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "accountId: CUID retornado ao criar a conta.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Atualizar conta completa",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "Todos os campos são obrigatórios. status: ACTIVE, SUSPENDED ou INACTIVE. Mantenha ACTIVE para testar a roteirização.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Transportadora Atualizada\",\n  \"slug\": \"transportadora-{{$guid}}\",\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Atualizar conta parcialmente",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "Aceita name, slug e status; pelo menos um campo. status: ACTIVE, SUSPENDED ou INACTIVE.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Transportadora Logfy\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 · Chaves de API (administração)",
+      "item": [
+        {
+          "name": "Criar chave de API",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/api-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "api-keys"
+              ]
+            },
+            "description": "accountId: CUID da conta. name: 2–150 caracteres. scopes: lista não vazia de routing:read e/ou routing:write. expiresAt: opcional, null ou data ISO 8601 futura com fuso. A chave completa só aparece na criação; captura apiKey e apiKeyId.\n\nStatus esperado: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Roteirização\",\n  \"scopes\": [\n    \"routing:read\",\n    \"routing:write\"\n  ],\n  \"expiresAt\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set(\"apiKeyId\", data.id);",
+                  "  pm.collectionVariables.set(\"apiKey\", data.key);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Listar chaves da conta",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/api-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Retorna { data: [...] }; sem paginação e sem revelar a chave completa.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 · Veículos",
+      "item": [
+        {
+          "name": "Cadastrar veículo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles"
+              ]
+            },
+            "description": "name: 1–150 caracteres. capacity: inteiro positivo até 2147483647. active: booleano, padrão true. Captura vehicleId.\n\nStatus esperado: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Van 01\",\n  \"capacity\": 100,\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set(\"vehicleId\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Listar veículos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Página, inteiro positivo. Padrão: 1."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Itens por página: 1 a 100. Padrão: 20."
+                }
+              ]
+            },
+            "description": "Veículos da conta autenticada. Retorna data e pagination.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Consultar veículo",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles",
+                "{{vehicleId}}"
+              ]
+            },
+            "description": "vehicleId: CUID do veículo da conta autenticada.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Atualizar veículo",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles",
+                "{{vehicleId}}"
+              ]
+            },
+            "description": "Aceita name, capacity e active; pelo menos um campo. Mantenha active=true para otimizar.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Van 01 Atualizada\",\n  \"capacity\": 120,\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 · Planos de rota",
+      "item": [
+        {
+          "name": "Criar plano de rota",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans"
+              ]
+            },
+            "description": "name: 1–150 caracteres; depotLatitude: -90 a 90; depotLongitude: -180 a 180. Captura routePlanId.\n\nStatus esperado: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Rota da manhã\",\n  \"depotLatitude\": -23.5505,\n  \"depotLongitude\": -46.6333\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set(\"routePlanId\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Listar planos de rota",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Página, inteiro positivo. Padrão: 1."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Itens por página: 1 a 100. Padrão: 20."
+                }
+              ]
+            },
+            "description": "Planos da conta autenticada. Retorna data e pagination.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Consultar plano de rota",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}"
+              ]
+            },
+            "description": "routePlanId: CUID do plano da conta autenticada.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Atualizar plano de rota",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}"
+              ]
+            },
+            "description": "Aceita name, depotLatitude e depotLongitude; pelo menos um campo. Invalida a otimização anterior.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Rota da manhã Atualizada\",\n  \"depotLatitude\": -23.5505,\n  \"depotLongitude\": -46.6333\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 · Entregas",
+      "item": [
+        {
+          "name": "Adicionar entrega ao plano",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/deliveries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "deliveries"
+              ]
+            },
+            "description": "routePlanId: CUID do plano. reference: 1–150 caracteres, única no plano. latitude: -90 a 90; longitude: -180 a 180. demand: inteiro positivo até 2147483647, na mesma unidade da capacidade. serviceDurationSeconds: 0–86400, padrão 0. Captura deliveryId; invalida otimização anterior.\n\nStatus esperado: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\": \"PEDIDO-001\",\n  \"latitude\": -23.5614,\n  \"longitude\": -46.6559,\n  \"demand\": 10,\n  \"serviceDurationSeconds\": 300\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", function () { pm.response.to.have.status(201); });",
+                  "if (pm.response.code === 201) {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.collectionVariables.set(\"deliveryId\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Listar entregas do plano",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/deliveries?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "deliveries"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Página, inteiro positivo. Padrão: 1."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Itens por página: 1 a 100. Padrão: 20."
+                }
+              ]
+            },
+            "description": "routePlanId: CUID do plano. Retorna data e pagination.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Consultar entrega",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/deliveries/{{deliveryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "deliveries",
+                "{{deliveryId}}"
+              ]
+            },
+            "description": "routePlanId e deliveryId: CUIDs retornados nas criações.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Atualizar entrega",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/deliveries/{{deliveryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "deliveries",
+                "{{deliveryId}}"
+              ]
+            },
+            "description": "Aceita reference, latitude, longitude, demand e serviceDurationSeconds; pelo menos um campo. Invalida a otimização anterior.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\": \"PEDIDO-001\",\n  \"latitude\": -23.5614,\n  \"longitude\": -46.6559,\n  \"demand\": 15,\n  \"serviceDurationSeconds\": 240\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "07 · Otimização (Google Maps)",
+      "item": [
+        {
+          "name": "Otimizar plano de rota",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/optimize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "optimize"
+              ]
+            },
+            "description": "Requer GOOGLE_MAPS_API_KEY válida no servidor, Routes API e faturamento habilitados. Faz chamada real ao Google, sujeita a cobrança. Sem configuração retorna 503 MAPS_NOT_CONFIGURED. vehicleIds: 1–100 CUIDs distintos de veículos ativos da conta, com capacidade suficiente. O plano deve conter entregas. Salva ou substitui a otimização.\n\nStatus esperado: 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vehicleIds\": [\n    \"{{vehicleId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Consultar última otimização",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/optimization",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "optimization"
+              ]
+            },
+            "description": "Execute após otimizar com sucesso. Retorna 404 OPTIMIZATION_NOT_FOUND se não houver resultado válido. Alterar plano ou entregas invalida o resultado.\n\nStatus esperado: 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "08 · Limpeza (executar por último)",
+      "item": [
+        {
+          "name": "Excluir entrega",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}/deliveries/{{deliveryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}",
+                "deliveries",
+                "{{deliveryId}}"
+              ]
+            },
+            "description": "Exclusão definitiva da entrega e invalidação da otimização.\n\nStatus esperado: 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Excluir plano de rota",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/route-plans/{{routePlanId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "route-plans",
+                "{{routePlanId}}"
+              ]
+            },
+            "description": "Exclusão definitiva do plano, entregas restantes e otimização em cascata.\n\nStatus esperado: 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Excluir veículo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "type": "text",
+                "description": "Chave completa capturada na criação; exige routing:read para GET e routing:write para escrita."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vehicles",
+                "{{vehicleId}}"
+              ]
+            },
+            "description": "Exclusão definitiva do veículo.\n\nStatus esperado: 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Revogar chave de API",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/api-keys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "api-keys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "accountId e apiKeyId: CUIDs capturados. Após revogar, a chave deixa de autenticar requisições.\n\nStatus esperado: 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Excluir conta",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text",
+                "description": "Credencial administrativa do .env."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "Exclusão lógica (soft delete). A conta pode ser vista na listagem com deleted=true ou all; suas chaves deixam de autenticar.\n\nStatus esperado: 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

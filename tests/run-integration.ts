@@ -32,7 +32,7 @@ async function main() {
       throw new Error('Test database migrations failed.');
     const result = spawnSync(
       'npx',
-      ['tsx', '--test', 'tests/integration/routing.test.ts'],
+      ['tsx', '--test', 'tests/integration/routing.test.ts', 'tests/integration/redis.test.ts'],
       { env, stdio: 'inherit' },
     );
     process.exitCode = result.status ?? 1;

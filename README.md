@@ -142,6 +142,19 @@ O módulo `routing` concentra a orquestração e os contratos `DistanceMatrixPro
 
 ## Verificação
 
+### Testar pelo Postman
+
+1. Importe a [coleção com os 27 endpoints](postman/logfy.postman_collection.json) e o [ambiente local](postman/local.postman_environment.json).
+2. Selecione o ambiente **Logfy · Local**, ajuste `baseUrl` se necessário (padrão `http://localhost:3000/v1`) e preencha `adminKey` com o mesmo valor de `ADMIN_API_KEY` configurado no servidor.
+3. Com o banco migrado e a API iniciada (`npm run dev`), execute as requisições na ordem das pastas. As criações salvam automaticamente `accountId`, `apiKeyId`, `apiKey`, `vehicleId`, `routePlanId` e `deliveryId` nas variáveis da coleção. Não crie variáveis de ambiente com esses nomes, pois elas sobrepõem os valores capturados.
+4. Cada requisição inclui nome, descrição dos parâmetros, corpo de exemplo quando aplicável e uma verificação do status HTTP esperado. Para repetir o fluxo, comece pela criação da conta; um slug novo é gerado a cada execução.
+
+A pasta **07 · Otimização** exige a configuração do Google Maps descrita acima e faz chamadas reais, sujeitas a cobrança. Sem essa configuração, pule essa pasta; os testes de status dela não passarão. Execute a pasta **08 · Limpeza** somente ao terminar: ela exclui os recursos de teste, revoga a chave e faz a exclusão lógica da conta. O Collection Runner executa também essas pastas se estiverem selecionadas.
+
+As credenciais ficam vazias nos arquivos de importação. A chave da conta é retornada somente na criação e fica armazenada localmente pelo Postman; remova os valores antes de compartilhar uma exportação.
+
+### Testes automatizados
+
 ```sh
 npm run typecheck
 npm run build
@@ -150,3 +163,60 @@ npm run test:integration
 ```
 
 Os testes de integração criam um banco temporário com nome aleatório no servidor indicado por `DATABASE_URL`, aplicam todas as migrations, executam o fluxo HTTP e removem esse banco ao terminar. O usuário PostgreSQL precisa de permissão para criar bancos. Os dados da aplicação não são usados pelos testes. O adaptador Google é simulado, sem chamadas externas ou consumo de crédito; seus contratos, lotes e falhas são testados separadamente.
+
+### Teste de carga
+
+Os scripts em `scripts/` exigem uma API em execução, com PostgreSQL e Redis, e uma chave com `routing:read` em `LOAD_API_KEY`. Eles chamam somente rotas de leitura (`/v1/vehicles` e `/v1/route-plans`, ajustáveis em `LOAD_PATHS`), sem chamadas ao Google. Rode-os apenas contra ambientes que você controla.
+
+**Antes de medir capacidade, suba o limite por IP na API de teste.** Com o padrão `RATE_LIMIT_MAX=120` por minuto, todas as requisições depois da 120ª retornam `429` e o resultado mostra apenas o rate limit. Defina um valor alto no `.env` (por exemplo `RATE_LIMIT_MAX=10000000`), reinicie a API e, se o contador ainda estiver cheio, aguarde `RATE_LIMIT_WINDOW_MS` ou reinicie o Redis. Restaure o valor original depois do teste.
+
+`scripts/load-test-rps.mjs` executa etapas com taxa fixa, independentemente da velocidade das respostas (modelo *open-loop*), e compara todas ao final. O padrão é 100, 200, 300 e 5000 req/s, 30 s cada:
+
+```sh
+LOAD_API_KEY='lgfy_test_...' node scripts/load-test-rps.mjs
+
+LOAD_API_KEY='lgfy_test_...' RATES=500,1000 STAGE_SECONDS=60 RESULT_FILE=resultado.json node scripts/load-test-rps.mjs
+```
+
+| Variável | Padrão | Uso |
+| --- | --- | --- |
+| `BASE_URL` | `http://127.0.0.1:3000` | Origem da API. |
+| `RATES` | `100,200,300,5000` | Taxas alvo em req/s, separadas por vírgula. |
+| `STAGE_SECONDS` | `30` | Duração de cada etapa. |
+| `COOLDOWN_SECONDS` | `5` | Pausa entre etapas. |
+| `TIMEOUT_MS` | `10000` | Timeout por requisição; excedido, conta como erro de rede (`timeout`). |
+| `MAX_INFLIGHT` | `1000` | Máximo de requisições simultâneas do gerador. |
+| `MAX_P95_MS` | `1000` | Limite de p95 para aprovar a etapa. |
+| `MAX_ERROR_RATE` | `0.01` | Taxa máxima de erros para aprovar a etapa. |
+| `MAX_DROPPED_RATE` | `0.05` | Máximo de requisições descartadas para aprovar a etapa. |
+| `RESULT_FILE` | vazio | Grava o resultado completo em JSON neste arquivo. |
+
+Durante a etapa, uma linha a cada 5 s mostra `enviadas`, `erros`, `descartadas` e `em_voo`. `em_voo` são as requisições enviadas que ainda aguardam resposta; um valor que só cresce indica que a API não acompanha a taxa. `descartadas` são requisições que o gerador deveria enviar, mas não enviou por atingir `MAX_INFLIGHT`; não são erros da API, e sim taxa abaixo do alvo.
+
+O resultado final é uma tabela com uma linha por taxa:
+
+| Coluna | Significado |
+| --- | --- |
+| `alvo req/s` | Taxa configurada para a etapa. |
+| `enviadas/s`, `200/s` | Requisições enviadas e respondidas com HTTP 200 por segundo. |
+| `erros` | Porcentagem de respostas diferentes de 200 e falhas de rede sobre as enviadas. |
+| `429`, `5xx`, `rede` | `429` indica rate limit; `5xx` inclui `503` quando o Redis falha; `rede` reúne timeouts, `ECONNRESET` e semelhantes. |
+| `p50`, `p95`, `p99`, `máx` | Latência em ms, apenas das respostas 200. Respostas `429` são rápidas e mascarariam a lentidão real. |
+| `descartadas` | Requisições não enviadas por `MAX_INFLIGHT`. |
+| `resultado` | `OK` ou `FALHOU`, com o motivo listado abaixo da tabela, junto da maior taxa aprovada. |
+
+O código de saída é `0` se todas as etapas passarem, `1` se alguma falhar e `130` se interrompido com Ctrl+C. O script avisa no início quando o limite da API é menor que o total de requisições planejado.
+
+A taxa de 5000 req/s roda em um único processo Node e disputa CPU com a API se estiverem na mesma máquina; o script avisa quando o agendamento atrasa mais de 100 ms. Para medir esse valor com confiança, execute o gerador em outra máquina. O limite de arquivos abertos (`ulimit -n`) precisa ser maior que `MAX_INFLIGHT`.
+
+`scripts/load-test.mjs` usa outro modelo (*closed-loop*): `CONCURRENCY` workers repetem requisições em sequência, então a taxa depende da velocidade da API. Aceita `BASE_URL`, `LOAD_API_KEY`, `LOAD_PATHS`, `CONCURRENCY` (padrão 20), `DURATION_SECONDS` (60), `RAMP_SECONDS` (10), `TIMEOUT_MS`, `MAX_P95_MS` e `MAX_ERROR_RATE`, e imprime um único resumo JSON. Use-o para medir quanto a API sustenta com uma concorrência fixa; use `load-test-rps.mjs` para verificar se ela aguenta uma taxa específica.
+
+## Redis e proteção HTTP
+
+Execute `docker compose up -d` antes de iniciar a API. `REDIS_URL` usa `redis://127.0.0.1:6379` por padrão. PostgreSQL e Redis são publicados somente na interface local pelo Compose. Em produção, configure Redis em rede privada com autenticação e TLS (`rediss://`).
+
+O limite distribuído por IP usa uma janela fixa atômica no Redis: `RATE_LIMIT_MAX=120` e `RATE_LIMIT_WINDOW_MS=60000`. Requisições excedentes recebem HTTP 429 e `Retry-After`; indisponibilidade do Redis bloqueia as rotas de negócio com HTTP 503. O contador e sua expiração são atualizados pelo mesmo script Lua, conforme a [documentação do Redis](https://redis.io/docs/latest/commands/incr/). O limite vale por IP e é baixo por padrão; testes de carga o esgotam em segundos (veja [Teste de carga](#teste-de-carga)).
+
+`CORS_ORIGINS` aceita origens separadas por vírgula. Vazio desabilita o acesso entre origens pelo navegador. `TRUST_PROXY` aceita endereços ou sub-redes dos proxies confiáveis separados por vírgula; vazio usa o endereço da conexão. Configure apenas proxies controlados que substituam os cabeçalhos encaminhados.
+
+`GET /v1/health` verifica o processo; `GET /v1/health/ready` verifica PostgreSQL e Redis e retorna 503 se alguma dependência falhar. Esses endpoints não consomem o limite. A inicialização exige as duas dependências, e SIGINT/SIGTERM drenam requisições e encerram conexões com prazo de dez segundos.

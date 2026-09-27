@@ -1,3 +1,5 @@
+import { RedisRateLimitStore } from '../../src/shared/redis/redis-rate-limit-store';
+import { redis } from '../../src/shared/redis/redis';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createApp } from '../../src/app';
@@ -36,7 +38,9 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
   t.after(() => {
     GoogleMapsDistanceMatrixProvider.prototype.compute = originalCompute;
   });
-  const server = createApp().listen(0, '127.0.0.1');
+  await redis.connect();
+  t.after(() => redis.disconnect());
+  const server = createApp({ rateLimitStore: new RedisRateLimitStore(redis, `logfy:test:${process.env.LOGFY_INTEGRATION_DATABASE}`) }).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   t.after(
     () =>

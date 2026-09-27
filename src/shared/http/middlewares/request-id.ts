@@ -13,7 +13,7 @@ export function requestId(
 ): void {
   const incomingRequestId = req.header('x-request-id');
 
-  const id = incomingRequestId || randomUUID();
+  const id = incomingRequestId && /^[a-zA-Z0-9_-]{1,64}$/.test(incomingRequestId) ? incomingRequestId : randomUUID();
 
   req.headers['x-request-id'] = id;
 

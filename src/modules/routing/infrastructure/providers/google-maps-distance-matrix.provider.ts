@@ -1,18 +1,19 @@
-import { z } from 'zod';
-import { AppError } from '../../../../shared/errors/app-error';
-import { DistanceMatrixProvider } from '../../application/ports/distance-matrix.provider';
+import { z } from "zod";
+import { AppError } from "../../../../shared/errors/app-error";
+import { DistanceMatrixProvider } from "../../application/ports/distance-matrix.provider";
 import {
   Coordinates,
   DistanceMatrix,
   TravelCost,
-} from '../../domain/entities/optimization.entity';
+} from "../../domain/entities/optimization.entity";
 
 const elementSchema = z.object({
   originIndex: z.number().int().nonnegative().default(0),
   destinationIndex: z.number().int().nonnegative().default(0),
   status: z.object({ code: z.number().int().default(0) }).default({ code: 0 }),
   condition: z.string().optional(),
-  distanceMeters: z.number().int().nonnegative().optional(),
+  // Google omits proto3 scalar fields when their value is zero.
+  distanceMeters: z.number().int().nonnegative().default(0),
   duration: z
     .string()
     .regex(/^\d+(?:\.\d+)?s$/)
@@ -29,9 +30,9 @@ export class GoogleMapsDistanceMatrixProvider implements DistanceMatrixProvider 
   async compute(points: Coordinates[]): Promise<DistanceMatrix> {
     if (!this.apiKey) {
       throw new AppError(
-        'MAPS_NOT_CONFIGURED',
+        "MAPS_NOT_CONFIGURED",
         503,
-        'The distance matrix provider is not configured.',
+        "The distance matrix provider is not configured.",
       );
     }
     const costs: (TravelCost | null)[][] = Array.from(
@@ -58,29 +59,29 @@ export class GoogleMapsDistanceMatrixProvider implements DistanceMatrixProvider 
         );
         try {
           const response = await this.fetcher(
-            'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
+            "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
             {
-              method: 'POST',
+              method: "POST",
               headers: {
-                'Content-Type': 'application/json',
-                'X-Goog-Api-Key': this.apiKey,
-                'X-Goog-FieldMask':
-                  'originIndex,destinationIndex,status,condition,distanceMeters,duration',
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": this.apiKey,
+                "X-Goog-FieldMask":
+                  "originIndex,destinationIndex,status,condition,distanceMeters,duration",
               },
               body: JSON.stringify({
                 origins: origins.map(waypoint),
                 destinations: destinations.map(waypoint),
-                travelMode: 'DRIVE',
-                routingPreference: 'TRAFFIC_UNAWARE',
+                travelMode: "DRIVE",
+                routingPreference: "TRAFFIC_UNAWARE",
               }),
               signal: AbortSignal.timeout(this.timeoutMs),
             },
           );
           if (!response.ok) {
             throw new AppError(
-              'MAPS_UNAVAILABLE',
+              "MAPS_UNAVAILABLE",
               502,
-              'The distance matrix provider failed.',
+              "The distance matrix provider failed.",
             );
           }
           const elements = z.array(elementSchema).parse(await response.json());
@@ -93,25 +94,24 @@ export class GoogleMapsDistanceMatrixProvider implements DistanceMatrixProvider 
               destinationIndex >= destinations.length ||
               seen.has(pair)
             ) {
-              throw new Error('Invalid matrix indices.');
+              throw new Error("Invalid matrix indices.");
             }
             seen.add(pair);
             if (element.status.code !== 0) {
-              throw new Error('Matrix element failed.');
+              throw new Error("Matrix element failed.");
             }
-            if (element.condition === 'ROUTE_NOT_FOUND') {
+            if (element.condition === "ROUTE_NOT_FOUND") {
               continue;
             }
             if (
-              element.condition !== 'ROUTE_EXISTS' ||
-              element.distanceMeters === undefined ||
+              element.condition !== "ROUTE_EXISTS" ||
               element.duration === undefined
             ) {
-              throw new Error('Missing matrix cost.');
+              throw new Error("Missing matrix cost.");
             }
             const durationSeconds = Number(element.duration.slice(0, -1));
             if (!Number.isFinite(durationSeconds)) {
-              throw new Error('Invalid matrix duration.');
+              throw new Error("Invalid matrix duration.");
             }
             costs[originOffset + originIndex]![
               destinationOffset + destinationIndex
@@ -121,7 +121,7 @@ export class GoogleMapsDistanceMatrixProvider implements DistanceMatrixProvider 
             };
           }
           if (seen.size !== origins.length * destinations.length) {
-            throw new Error('Incomplete matrix.');
+            throw new Error("Incomplete matrix.");
           }
         } catch (error) {
           if (error instanceof AppError) {
@@ -129,22 +129,22 @@ export class GoogleMapsDistanceMatrixProvider implements DistanceMatrixProvider 
           }
           if (
             error instanceof Error &&
-            (error.name === 'TimeoutError' || error.name === 'AbortError')
+            (error.name === "TimeoutError" || error.name === "AbortError")
           ) {
             throw new AppError(
-              'MAPS_TIMEOUT',
+              "MAPS_TIMEOUT",
               504,
-              'The distance matrix provider timed out.',
+              "The distance matrix provider timed out.",
             );
           }
           throw new AppError(
-            'INVALID_DISTANCE_MATRIX',
+            "INVALID_DISTANCE_MATRIX",
             502,
-            'The distance matrix provider returned an invalid or incomplete response.',
+            "The distance matrix provider returned an invalid or incomplete response.",
           );
         }
       }
     }
-    return { provider: 'google-routes', costs };
+    return { provider: "google-routes", costs };
   }
 }

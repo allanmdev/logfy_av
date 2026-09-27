@@ -9,9 +9,17 @@ export const logger = pino({
 
   level: env.LOG_LEVEL,
 
+  serializers: {
+    req(req) {
+      return { id: req.id, method: req.method, url: req.url?.split('?')[0], remoteAddress: req.remoteAddress };
+    },
+  },
+
   redact: {
     paths: [
       'req.headers.authorization',
+      'req.headers.cookie',
+      'res.headers["set-cookie"]',
       'req.headers["x-api-key"]',
       'req.headers["x-admin-key"]',
       'apiKey',
