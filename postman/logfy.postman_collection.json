@@ -1062,7 +1062,7 @@
             "description": "Requer GOOGLE_MAPS_API_KEY válida no servidor, Routes API e faturamento habilitados. Faz chamada real ao Google, sujeita a cobrança. Sem configuração retorna 503 MAPS_NOT_CONFIGURED. vehicleIds: 1–100 CUIDs distintos de veículos ativos da conta, com capacidade suficiente. O plano deve conter entregas. Salva ou substitui a otimização.\n\nStatus esperado: 200.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"vehicleIds\": [\n    \"{{vehicleId}}\"\n  ]\n}",
+              "raw": "{\n  \"vehicleIds\": [\n    \"{{vehicleId}}\"\n  ],\n  \"fuelConsumptionKmPerLiter\": 10\n}",
               "options": {
                 "raw": {
                   "language": "json"

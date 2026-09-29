@@ -1,9 +1,13 @@
 import { AppError } from '../../../../shared/errors/app-error';
+import { Vehicle } from '../../../vehicles/domain/entities/vehicle.entity';
 import { RouteOptimizer } from '../../application/ports/route-optimizer';
 import {
   DistanceMatrix,
   OptimizationSnapshot,
   OptimizationResult,
+  OptimizationOptions,
+  OptimizedRoute,
+  RouteMetrics,
   TravelCost,
 } from '../../domain/entities/optimization.entity';
 
@@ -11,6 +15,7 @@ export class CheapestInsertionOptimizer implements RouteOptimizer {
   optimize(
     snapshot: OptimizationSnapshot,
     matrix: DistanceMatrix,
+    options: OptimizationOptions,
   ): OptimizationResult {
     const count = snapshot.deliveries.length + 1;
     if (
@@ -87,40 +92,22 @@ export class CheapestInsertionOptimizer implements RouteOptimizer {
     }
     const optimized = routes
       .filter((route) => route.load > 0)
-      .map((route) => {
-        let elapsed = 0;
-        let distance = 0;
-        const stops = route.points.slice(1, -1).map((point, index) => {
-          const delivery = snapshot.deliveries[point - 1]!;
-          const leg = cost(route.points[index]!, point)!;
-          elapsed += leg.durationSeconds;
-          distance += leg.distanceMeters;
-          const arrivalSeconds = elapsed;
-          elapsed += delivery.serviceDurationSeconds;
-          return {
-            deliveryId: delivery.id,
-            reference: delivery.reference,
-            latitude: delivery.latitude,
-            longitude: delivery.longitude,
-            demand: delivery.demand,
-            serviceDurationSeconds: delivery.serviceDurationSeconds,
-            sequence: index + 1,
-            arrivalSeconds,
-            ...leg,
-          };
-        });
-        const returnToDepot = cost(route.points[route.points.length - 2]!, 0)!;
-        return {
-          vehicleId: route.vehicle.id,
-          vehicleName: route.vehicle.name,
-          capacity: route.vehicle.capacity,
-          load: route.load,
-          stops,
-          returnToDepot,
-          totalDistanceMeters: distance + returnToDepot.distanceMeters,
-          totalDurationSeconds: elapsed + returnToDepot.durationSeconds,
-        };
-      });
+      .map((route) => this.buildRoute(snapshot, route, cost));
+    const unoptimized = this.buildUnoptimized(snapshot, cost);
+    const totalDistanceMeters = this.sum(optimized, 'totalDistanceMeters');
+    const totalDurationSeconds = this.sum(optimized, 'totalDurationSeconds');
+    const after = this.metrics(
+      totalDistanceMeters,
+      totalDurationSeconds,
+      options.fuelConsumptionKmPerLiter,
+    );
+    const before = unoptimized
+      ? this.metrics(
+          this.sum(unoptimized, 'totalDistanceMeters'),
+          this.sum(unoptimized, 'totalDurationSeconds'),
+          options.fuelConsumptionKmPerLiter,
+        )
+      : null;
     return {
       algorithm: 'capacity-cheapest-insertion-v1',
       matrixProvider: matrix.provider,
@@ -129,14 +116,124 @@ export class CheapestInsertionOptimizer implements RouteOptimizer {
         longitude: snapshot.plan.depotLongitude,
       },
       routes: optimized,
-      totalDistanceMeters: optimized.reduce(
-        (sum, route) => sum + route.totalDistanceMeters,
-        0,
-      ),
-      totalDurationSeconds: optimized.reduce(
-        (sum, route) => sum + route.totalDurationSeconds,
-        0,
-      ),
+      unoptimizedRoutes: unoptimized,
+      totalDistanceMeters,
+      totalDurationSeconds,
+      summary: {
+        fuelConsumptionKmPerLiter: options.fuelConsumptionKmPerLiter,
+        before,
+        after,
+        savings: before
+          ? {
+              distanceKm: this.round(before.distanceKm - after.distanceKm),
+              durationSeconds: before.durationSeconds - after.durationSeconds,
+              fuelLiters: this.round(before.fuelLiters - after.fuelLiters),
+              distancePercent: before.distanceKm
+                ? this.round(
+                    ((before.distanceKm - after.distanceKm) /
+                      before.distanceKm) *
+                      100,
+                  )
+                : 0,
+            }
+          : null,
+      },
     };
+  }
+
+  private buildUnoptimized(
+    snapshot: OptimizationSnapshot,
+    cost: (from: number, to: number) => TravelCost | null,
+  ): OptimizedRoute[] | null {
+    const routes = snapshot.vehicles.map((vehicle) => ({
+      vehicle,
+      load: 0,
+      points: [0],
+    }));
+    for (const [index, delivery] of snapshot.deliveries.entries()) {
+      const route = routes.find(
+        (item) => item.load + delivery.demand <= item.vehicle.capacity,
+      );
+      if (!route) {
+        return null;
+      }
+      route.points.push(index + 1);
+      route.load += delivery.demand;
+    }
+    const built: OptimizedRoute[] = [];
+    for (const route of routes.filter((item) => item.load > 0)) {
+      route.points.push(0);
+      const legs = route.points
+        .slice(1)
+        .map((point, index) => cost(route.points[index]!, point));
+      if (legs.some((leg) => !leg)) {
+        return null;
+      }
+      built.push(this.buildRoute(snapshot, route, cost));
+    }
+    return built;
+  }
+
+  private buildRoute(
+    snapshot: OptimizationSnapshot,
+    route: { vehicle: Vehicle; load: number; points: number[] },
+    cost: (from: number, to: number) => TravelCost | null,
+  ): OptimizedRoute {
+    let elapsed = 0;
+    let distance = 0;
+    const stops = route.points.slice(1, -1).map((point, index) => {
+      const delivery = snapshot.deliveries[point - 1]!;
+      const leg = cost(route.points[index]!, point)!;
+      elapsed += leg.durationSeconds;
+      distance += leg.distanceMeters;
+      const arrivalSeconds = elapsed;
+      elapsed += delivery.serviceDurationSeconds;
+      return {
+        deliveryId: delivery.id,
+        reference: delivery.reference,
+        latitude: delivery.latitude,
+        longitude: delivery.longitude,
+        demand: delivery.demand,
+        serviceDurationSeconds: delivery.serviceDurationSeconds,
+        sequence: index + 1,
+        arrivalSeconds,
+        ...leg,
+      };
+    });
+    const returnToDepot = cost(route.points[route.points.length - 2]!, 0)!;
+    return {
+      vehicleId: route.vehicle.id,
+      vehicleName: route.vehicle.name,
+      capacity: route.vehicle.capacity,
+      load: route.load,
+      stops,
+      returnToDepot,
+      totalDistanceMeters: distance + returnToDepot.distanceMeters,
+      totalDurationSeconds: elapsed + returnToDepot.durationSeconds,
+    };
+  }
+
+  private sum(
+    routes: OptimizedRoute[],
+    key: 'totalDistanceMeters' | 'totalDurationSeconds',
+  ): number {
+    return routes.reduce((total, route) => total + route[key], 0);
+  }
+
+  private metrics(
+    distanceMeters: number,
+    durationSeconds: number,
+    kmPerLiter: number,
+  ): RouteMetrics {
+    const distanceKm = distanceMeters / 1000;
+    return {
+      distanceKm: this.round(distanceKm),
+      durationSeconds,
+      fuelLiters: this.round(distanceKm / kmPerLiter),
+    };
+  }
+
+  private round(value: number): number {
+    return Math.round(value * 100) / 100;
   }
 }

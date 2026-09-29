@@ -340,6 +340,7 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
   const repository = new PrismaOptimizationRepository();
   const deliveryRepository = new PrismaDeliveryRepository();
   const engine = new CheapestInsertionOptimizer();
+  const options = { fuelConsumptionKmPerLiter: 10 };
   const snapshot = await repository.loadSnapshot(
     accountA.id,
     plan.id,
@@ -351,7 +352,7 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
       .map(() => ({ latitude: 0, longitude: 0 }))
       .concat({ latitude: 0, longitude: 0 }),
   );
-  const computed = engine.optimize(snapshot, matrix);
+  const computed = engine.optimize(snapshot, matrix, options);
   await deliveryRepository.update(accountA.id, plan.id, delivery.id, {
     demand: 2,
   });
@@ -369,7 +370,7 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
   );
   const saved = await repository.save(
     current,
-    engine.optimize(current, matrix),
+    engine.optimize(current, matrix, options),
   );
   await assert.rejects(
     repository.save(current, computed),
@@ -405,7 +406,7 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
     [vehicle.id],
     100,
   );
-  const competingResult = engine.optimize(competingSnapshot, matrix);
+  const competingResult = engine.optimize(competingSnapshot, matrix, options);
   const competing = await Promise.allSettled([
     repository.save(competingSnapshot, competingResult),
     repository.save(competingSnapshot, competingResult),

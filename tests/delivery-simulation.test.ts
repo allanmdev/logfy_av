@@ -271,9 +271,13 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
     new CheapestInsertionOptimizer(),
     100,
   );
-  const optimized = await useCase.execute(accountId, snapshot.plan.id, [
-    "van-ana",
-  ]);
+  const gasolineEfficiencyKmPerLiter = 10;
+  const optimized = await useCase.execute(
+    accountId,
+    snapshot.plan.id,
+    ["van-ana"],
+    gasolineEfficiencyKmPerLiter,
+  );
   assert.deepEqual(loadSnapshot.mock.calls[0]!.arguments, [
     accountId,
     snapshot.plan.id,
@@ -317,7 +321,6 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
   const journey = simulate(t, snapshot, matrix, ids);
   const savedSeconds = baseline.elapsed - journey.elapsed;
   const savedPercentage = (savedSeconds / baseline.elapsed) * 100;
-  const gasolineEfficiencyKmPerLiter = 10;
   const gasolineWithoutOptimizationLiters =
     baseline.distance / 1000 / gasolineEfficiencyKmPerLiter;
   const gasolineWithOptimizationLiters =
@@ -326,6 +329,17 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
     gasolineWithoutOptimizationLiters - gasolineWithOptimizationLiters;
   const savedGasolinePercentage =
     (savedGasolineLiters / gasolineWithoutOptimizationLiters) * 100;
+  assert.deepEqual(optimized.result.summary, {
+    fuelConsumptionKmPerLiter: gasolineEfficiencyKmPerLiter,
+    before: { distanceKm: 8, durationSeconds: 980, fuelLiters: 0.8 },
+    after: { distanceKm: 6, durationSeconds: 780, fuelLiters: 0.6 },
+    savings: {
+      distanceKm: 2,
+      durationSeconds: 200,
+      fuelLiters: 0.2,
+      distancePercent: 25,
+    },
+  });
   assert.equal(gasolineWithoutOptimizationLiters, 0.8);
   assert.equal(gasolineWithOptimizationLiters, 0.6);
   assert.ok(Math.abs(savedGasolineLiters - 0.2) < 1e-9);

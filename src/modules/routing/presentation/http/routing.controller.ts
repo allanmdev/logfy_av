@@ -19,6 +19,7 @@ export class RoutingController {
         getAuth(req).accountId,
         req.params.id,
         req.body.vehicleIds,
+        req.body.fuelConsumptionKmPerLiter,
       );
       res.status(200).json({ data: result });
     } catch (error) {

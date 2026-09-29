@@ -58,6 +58,7 @@ function matrix(size: number): DistanceMatrix {
   };
 }
 const optimizer = new CheapestInsertionOptimizer();
+const options = { fuelConsumptionKmPerLiter: 10 };
 
 test('optimizer uses directed travel costs, service durations and return to depot', () => {
   const input = snapshot();
@@ -81,7 +82,7 @@ test('optimizer uses directed travel costs, service durations and return to depo
       ],
     ],
   };
-  const result = optimizer.optimize(input, costs);
+  const result = optimizer.optimize(input, costs, options);
   const route = result.routes[0]!;
   assert.deepEqual(
     route.stops.map((stop) => stop.deliveryId),
@@ -103,7 +104,7 @@ test('optimizer uses directed travel costs, service durations and return to depo
 });
 
 test('optimizer assigns each delivery once and respects individual vehicle capacities', () => {
-  const result = optimizer.optimize(snapshot([3, 3, 2, 2], [5, 5]), matrix(5));
+  const result = optimizer.optimize(snapshot([3, 3, 2, 2], [5, 5]), matrix(5), options);
   assert.equal(result.routes.length, 2);
   const ids = result.routes.flatMap((route) =>
     route.stops.map((stop) => stop.deliveryId),
@@ -122,7 +123,7 @@ test('unreachable deliveries and insufficient capacities never produce partial r
     [snapshot([6], [5]), matrix(2)],
   ] as const) {
     assert.throws(
-      () => optimizer.optimize(input, costs),
+      () => optimizer.optimize(input, costs, options),
       (error: unknown) =>
         error instanceof AppError && error.code === 'OPTIMIZATION_INCOMPLETE',
     );
@@ -130,10 +131,10 @@ test('unreachable deliveries and insufficient capacities never produce partial r
 });
 
 test('optimizer rejects invalid matrix dimensions and negative costs', () => {
-  assert.throws(() => optimizer.optimize(snapshot(), matrix(2)), AppError);
+  assert.throws(() => optimizer.optimize(snapshot(), matrix(2), options), AppError);
   const invalid = matrix(3);
   invalid.costs[0]![1]!.durationSeconds = -1;
-  assert.throws(() => optimizer.optimize(snapshot(), invalid), AppError);
+  assert.throws(() => optimizer.optimize(snapshot(), invalid, options), AppError);
 });
 
 test('use case rejects infeasible input before calling a paid provider and never saves failed computations', async () => {
@@ -160,20 +161,20 @@ test('use case rejects infeasible input before calling a paid provider and never
     100,
   );
   await assert.rejects(
-    useCase.execute('account', 'plan', ['vehicle']),
+    useCase.execute('account', 'plan', ['vehicle'], 10),
     (error: unknown) =>
       error instanceof AppError && error.code === 'INSUFFICIENT_CAPACITY',
   );
   assert.equal(calls, 0);
   current = snapshot();
   await assert.rejects(
-    useCase.execute('account', 'plan', ['vehicle']),
+    useCase.execute('account', 'plan', ['vehicle'], 10),
     /Provider failed/,
   );
   assert.equal(calls, 1);
   assert.equal(saves, 0);
   await assert.rejects(
-    useCase.execute('account', 'plan', ['vehicle', 'vehicle']),
+    useCase.execute('account', 'plan', ['vehicle', 'vehicle'], 10),
     AppError,
   );
 });

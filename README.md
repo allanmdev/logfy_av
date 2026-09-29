@@ -109,7 +109,7 @@ POST /v1/route-plans/PLAN_ID/optimize
 Content-Type: application/json
 X-API-Key: SUA_API_KEY
 
-{"vehicleIds":["VEHICLE_ID"]}
+{"vehicleIds":["VEHICLE_ID"],"fuelConsumptionKmPerLiter":10}
 ```
 
 `PLAN_ID`, `VEHICLE_ID` e `ACCOUNT_ID` representam os CUIDs retornados pela API. `accountId` não é aceito nos corpos de roteirização. Latitude deve estar entre -90 e 90; longitude entre -180 e 180. `capacity` e `demand` são inteiros positivos na mesma unidade definida pela empresa. `active` é `true` por padrão; `serviceDurationSeconds` é 0 por padrão e aceita até 86400 segundos. A referência da entrega é única dentro do plano. Campos desconhecidos e patches vazios são rejeitados com `422`.
@@ -155,14 +155,99 @@ As credenciais ficam vazias nos arquivos de importação. A chave da conta é re
 
 ### Testes automatizados
 
+Os testes usam o executor nativo do Node.js (`node:test`), as asserções de `node:assert/strict` e o `tsx` para executar TypeScript. Execute os comandos abaixo na raiz do projeto.
+
+#### Preparar o ambiente
+
+Instale as dependências e gere o cliente Prisma:
+
 ```sh
-npm run typecheck
-npm run build
+npm ci
+# Copie apenas se ainda não existir um .env, preservando sua configuração.
+cp -n .env.example .env
+npx prisma generate
+```
+
+O `.env` precisa conter `DATABASE_URL` mesmo para os testes com banco simulado, pois alguns módulos inicializam o cliente Prisma ao serem importados. A suíte padrão não exige PostgreSQL ou Redis em execução, migrations aplicadas nem uma chave real do Google. Os testes HTTP iniciam e encerram seus próprios servidores em portas locais disponíveis; não é necessário executar `npm run dev`.
+
+#### Executar a suíte padrão
+
+```sh
 npm test
+```
+
+Esse comando executa somente `tests/*.test.ts`; os arquivos em `tests/integration/` ficam fora dele. Repositórios, respostas do Google e armazenamento do rate limit são substituídos por implementações controladas em memória (mocks), conforme o teste.
+
+Para executar apenas um arquivo ou filtrar um cenário pelo nome:
+
+```sh
+npx tsx --test tests/delivery-simulation.test.ts
+npx tsx --test tests/routing-optimizer.test.ts
+npx tsx --test --test-name-pattern="otimiza a jornada" tests/delivery-simulation.test.ts
+```
+
+Na saída, cada cenário aparece como aprovado (`ok`/✔) ou reprovado (`not ok`/✖), dependendo do formato do relatório. Uma falha mostra a asserção e a localização no código; o processo termina com código diferente de zero. As mensagens emitidas por `t.diagnostic`, como os eventos da jornada da Ana, são informações adicionais e não representam falhas.
+
+#### O que cada arquivo testa
+
+| Arquivo | Cenários verificados |
+| --- | --- |
+| [accounts-list.test.ts](tests/accounts-list.test.ts) | Listagem HTTP de contas com Prisma simulado: filtros `deleted=false`, `deleted=true` e `deleted=all`, paginação, página sem resultados e ordenação por criação e ID decrescentes. Confirma que a consulta padrão inclui contas excluídas e que parâmetros inválidos retornam `422` antes de consultar o repositório. |
+| [api-key-authentication.test.ts](tests/api-key-authentication.test.ts) | Autenticação consulta apenas o hash SHA-256, retorna conta, ID da chave e scopes sem credenciais, e registra o uso da chave válida. Rejeita chave desconhecida, revogada ou expirada e conta suspensa, inativa ou excluída sem registrar uso. Chaves malformadas são rejeitadas antes de consultar o repositório. |
+| [prisma-account.repository.test.ts](tests/prisma-account.repository.test.ts) | Quatro cenários com erros Prisma simulados: em `create` e `update`, conflito de unicidade (`P2002`) vira `409`, com os códigos `ACCOUNT_ALREADY_EXISTS` e `ACCOUNT_SLUG_ALREADY_EXISTS`, respectivamente; em ambas as operações, erros inesperados são propagados sem substituição. |
+| [http-security.test.ts](tests/http-security.test.ts) | Três cenários HTTP: excesso de requisições retorna `429`, com headers de limite, sem permitir contorno por `X-Forwarded-For` forjado; falha no armazenamento do limite retorna `503` sem expor detalhes internos; JSON inválido e corpo grande retornam `400` e `413` com código de erro e identificação da requisição. |
+| [google-maps-matrix.test.ts](tests/google-maps-matrix.test.ts) | Com `fetch` simulado, aceita distâncias zero omitidas, reorganiza índices fora de ordem, interpreta segundos decimais e representa trechos inacessíveis. Confere a divisão de 26 pontos em quatro lotes de até 625 elementos. Rejeita células ausentes ou duplicadas, índice fora dos limites, erro em elemento, duração ausente ou inválida e formato JSON incorreto. Verifica ausência de configuração (`503`), falha HTTP do provedor (`502`, sem expor a chave) e timeout (`504`). |
+| [routing-optimizer.test.ts](tests/routing-optimizer.test.ts) | Cinco cenários: custos diferentes por sentido, atendimento e retorno ao depósito; cada entrega atribuída uma única vez respeitando a capacidade dos veículos; recusa de solução parcial para entregas inacessíveis ou capacidade insuficiente; recusa de matriz com dimensões inválidas ou custos negativos; validações do caso de uso antes de chamar o provedor, rejeição de veículos duplicados e ausência de salvamento quando o cálculo falha. |
+| [delivery-simulation.test.ts](tests/delivery-simulation.test.ts) | Três cenários com dados locais: criação de planos e entregas, jornada na ordem de cadastro e comparação com a jornada otimizada. Os resultados e os logs estão detalhados abaixo. |
+
+#### Simulação de entregas: jornada da Ana
+
+O arquivo `delivery-simulation.test.ts` executa os casos de uso reais com repositórios e matriz de distâncias simulados:
+
+1. **Cria várias rotas com entregas vinculadas à conta e ao plano correto:** cria três planos (Norte, Sul e Centro), com quatro entregas cada. Verifica IDs distintos, status inicial `draft`, vínculo com a conta e o plano e os argumentos enviados aos repositórios.
+2. **Simula Ana fazendo entregas na ordem de cadastro com logs de cada etapa:** percorre três entregas sem reordená-las e confere a sequência de saída, chegada, conclusão e retorno ao depósito. Valida os tempos acumulados, a distância e o horário final da simulação.
+3. **Otimiza a jornada de entregas e reduz distância e tempo com logs:** usa o otimizador real, verifica a consulta da matriz e o salvamento do resultado, a capacidade da van, a sequência das paradas e a presença de todas as entregas. Compara os totais e os horários de chegada calculados com a simulação do percurso e estima o consumo de gasolina considerando 10 km/l constantes.
+
+| Medida | Ordem de cadastro | Rota otimizada |
+| --- | --- | --- |
+| Distância, incluindo retorno | 8 km | 6 km |
+| Tempo, incluindo atendimento e retorno | 980 s (16 min 20 s) | 780 s (13 min) |
+| Gasolina estimada a 10 km/l | 0,80 L | 0,60 L |
+
+Nesse cenário, a economia é de 2 km, 200 segundos (20,41%) e 0,20 L (25%). São valores definidos pela matriz fictícia do teste, não medições do Google ou garantia de economia em rotas reais. A estimativa de combustível é calculada pelo próprio teste.
+
+Os logs incluem `event`, `driver`, `deliveryId` quando aplicável, `elapsed` (segundos acumulados) e `timestamp` (horário simulado). O tempo avança por cálculo, sem esperar os minutos da jornada transcorrerem.
+
+#### Executar os testes de integração
+
+Com Docker e Docker Compose disponíveis, inicie as dependências locais e aguarde ficarem prontas:
+
+```sh
+docker compose up -d --wait postgres redis
 npm run test:integration
 ```
 
-Os testes de integração criam um banco temporário com nome aleatório no servidor indicado por `DATABASE_URL`, aplicam todas as migrations, executam o fluxo HTTP e removem esse banco ao terminar. O usuário PostgreSQL precisa de permissão para criar bancos. Os dados da aplicação não são usados pelos testes. O adaptador Google é simulado, sem chamadas externas ou consumo de crédito; seus contratos, lotes e falhas são testados separadamente.
+Configure `DATABASE_URL` e `REDIS_URL` no `.env` para apontar para essas instâncias; os valores de `.env.example` correspondem ao Compose. Também é possível usar instâncias de teste já disponíveis. O banco indicado por `DATABASE_URL` deve existir e seu usuário PostgreSQL precisa de permissão para criar bancos (`CREATEDB` ou equivalente).
+
+O script [tests/run-integration.ts](tests/run-integration.ts) carrega o `.env`, cria um banco `logfy_test_<valor aleatório>` no mesmo servidor, aplica todas as migrations e executa os dois arquivos abaixo. Ele define `NODE_ENV=test`, gera uma chave administrativa temporária e remove o banco em um bloco `finally`, inclusive quando um teste falha. Uma interrupção forçada do processo pode impedir essa limpeza. As tabelas do banco da aplicação não são usadas pelos testes.
+
+| Arquivo | Cenários verificados |
+| --- | --- |
+| [integration/routing.test.ts](tests/integration/routing.test.ts) | Um fluxo integrado com HTTP, PostgreSQL e Redis reais: saúde pública, autenticação administrativa e por API Key, restrição de scopes, isolamento entre duas contas, cadastros e alterações de planos, entregas e veículos, validação de parâmetros e conflitos. Verifica persistência e substituição da otimização, invalidação após mudanças, proteção contra gravações concorrentes, hash e último uso da chave, rejeição de credenciais/contas inválidas e exclusão em cascata. O provedor Google é simulado. |
+| [integration/redis.test.ts](tests/integration/redis.test.ts) | Dois clientes Redis fazem 30 incrementos concorrentes no mesmo contador. Verifica que cada incremento recebe um número único de 1 a 30, que a janela tem expiração e que o contador reinicia após expirar. Usa uma chave aleatória e tenta removê-la ao finalizar. |
+
+Execute o fluxo de integração pelo script npm: `routing.test.ts` recusa execução direta sem a identificação do banco temporário. Não é necessário iniciar a API separadamente nem configurar uma chave real do Google; não há chamadas externas ao Google ou consumo de crédito nesses testes. O Redis usado é o indicado por `REDIS_URL`, com chaves de teste; o script não cria uma instância Redis separada.
+
+Se houver erro de conexão, confira `docker compose ps` e as URLs do `.env`. Erro de permissão em `CREATE DATABASE` exige ajustar o usuário do PostgreSQL. Se o fluxo HTTP retornar `429`, confira `RATE_LIMIT_MAX`: a integração herda essa configuração e o padrão do projeto é 120.
+
+#### Verificações complementares
+
+```sh
+npm run typecheck
+npm run build
+```
+
+`typecheck` verifica os tipos sem gerar arquivos; `build` compila a aplicação em `dist/`. Esses comandos complementam as suítes, mas não executam testes.
 
 ### Teste de carga
 

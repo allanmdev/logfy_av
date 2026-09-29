@@ -11,7 +11,12 @@ export class OptimizeRoutePlanUseCase {
     private readonly maxDeliveries: number,
   ) {}
 
-  async execute(accountId: string, routePlanId: string, vehicleIds: string[]) {
+  async execute(
+    accountId: string,
+    routePlanId: string,
+    vehicleIds: string[],
+    fuelConsumptionKmPerLiter: number,
+  ) {
     if (
       !vehicleIds.length ||
       vehicleIds.length > 100 ||
@@ -74,7 +79,9 @@ export class OptimizeRoutePlanUseCase {
         longitude,
       })),
     ]);
-    const result = this.optimizer.optimize(snapshot, matrix);
+    const result = this.optimizer.optimize(snapshot, matrix, {
+      fuelConsumptionKmPerLiter,
+    });
     return this.repository.save(snapshot, result);
   }
 }

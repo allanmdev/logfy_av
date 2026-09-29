@@ -45,13 +45,32 @@ export interface OptimizedRoute {
   totalDurationSeconds: number;
 }
 
+export interface RouteMetrics {
+  distanceKm: number;
+  durationSeconds: number;
+  fuelLiters: number;
+}
+
+export interface OptimizationSummary {
+  fuelConsumptionKmPerLiter: number;
+  before: RouteMetrics | null;
+  after: RouteMetrics;
+  savings: RouteMetrics & { distancePercent: number } | null;
+}
+
+export interface OptimizationOptions {
+  fuelConsumptionKmPerLiter: number;
+}
+
 export interface OptimizationResult {
   algorithm: string;
   matrixProvider: string;
   depot: Coordinates;
   routes: OptimizedRoute[];
+  unoptimizedRoutes: OptimizedRoute[] | null;
   totalDistanceMeters: number;
   totalDurationSeconds: number;
+  summary: OptimizationSummary;
 }
 
 export interface RouteOptimization {
