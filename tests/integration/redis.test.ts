@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { test, onTestFinished } from 'vitest';
 import Redis from 'ioredis';
 import { env } from '../../src/config/env';
 import { RedisRateLimitStore } from '../../src/shared/redis/redis-rate-limit-store';
 
-test('Redis counts concurrent requests across clients atomically and expires the window', async (t) => {
+test('Redis counts concurrent requests across clients atomically and expires the window', async () => {
   const clients = [new Redis(env.REDIS_URL, { lazyConnect: true }), new Redis(env.REDIS_URL, { lazyConnect: true })];
   const key = randomUUID();
-  t.after(async () => {
+  onTestFinished(async () => {
     try {
       if (clients[0]!.status === 'ready') await clients[0]!.del(`logfy:rate-limit:${key}`);
     } finally {

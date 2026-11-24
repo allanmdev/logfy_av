@@ -1,7 +1,7 @@
 import { RedisRateLimitStore } from '../../src/shared/redis/redis-rate-limit-store';
 import { redis } from '../../src/shared/redis/redis';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, onTestFinished } from 'vitest';
 import { createApp } from '../../src/app';
 import { prisma } from '../../src/shared/database/prisma';
 import { GoogleMapsDistanceMatrixProvider } from '../../src/modules/routing/infrastructure/providers/google-maps-distance-matrix.provider';
@@ -19,8 +19,8 @@ if (
   throw new Error('Run this test using npm run test:integration.');
 }
 
-test('routing HTTP flow, tenant isolation, persistence and optimistic concurrency on PostgreSQL', async (t) => {
-  t.after(() => prisma.$disconnect());
+test('routing HTTP flow, tenant isolation, persistence and optimistic concurrency on PostgreSQL', async () => {
+  onTestFinished(() => prisma.$disconnect());
   const originalCompute = GoogleMapsDistanceMatrixProvider.prototype.compute;
   let matrixCalls = 0;
   GoogleMapsDistanceMatrixProvider.prototype.compute = async (points) => {
@@ -35,14 +35,14 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
       ),
     };
   };
-  t.after(() => {
+  onTestFinished(() => {
     GoogleMapsDistanceMatrixProvider.prototype.compute = originalCompute;
   });
   await redis.connect();
-  t.after(() => redis.disconnect());
+  onTestFinished(() => redis.disconnect());
   const server = createApp({ rateLimitStore: new RedisRateLimitStore(redis, `logfy:test:${process.env.LOGFY_INTEGRATION_DATABASE}`) }).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
-  t.after(
+  onTestFinished(
     () =>
       new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
@@ -214,8 +214,8 @@ test('routing HTTP flow, tenant isolation, persistence and optimistic concurrenc
     (
       await a(`${path}/deliveries`, 'POST', {
         reference: 'D1',
-        latitude: 0,
-        longitude: 0,
+        latitude: -23.15,
+        longitude: -46.15,
         demand: 1,
       })
     ).status,

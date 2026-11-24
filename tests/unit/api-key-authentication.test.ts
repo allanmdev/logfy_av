@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { test } from 'node:test';
-import { AuthenticateApiKeyUseCase } from '../src/modules/api-keys/application/use-cases/authenticate-api-key.use-case';
+import { test } from 'vitest';
+import { AuthenticateApiKeyUseCase } from '../../src/modules/api-keys/application/use-cases/authenticate-api-key.use-case';
 import {
   ApiKeyAuthenticationData,
   ApiKeyRepository,
-} from '../src/modules/api-keys/domain/repositories/api-key.repository';
-import { AppError } from '../src/shared/errors/app-error';
+} from '../../src/modules/api-keys/domain/repositories/api-key.repository';
+import { AppError } from '../../src/shared/errors/app-error';
 
 const key = `lgfy_test_${'a'.repeat(64)}`;
 const hash = createHash('sha256').update(key).digest('hex');
@@ -55,7 +55,7 @@ for (const [label, invalid] of [
       updateLastUsedAt: async () => {
         assert.fail('Invalid key must not be marked as used');
       },
-    } as ApiKeyRepository;
+    } as unknown as ApiKeyRepository;
     await assert.rejects(
       new AuthenticateApiKeyUseCase(repository).execute(key),
       (error: unknown) => error instanceof AppError && error.statusCode === 401,

@@ -7,6 +7,7 @@ async function main() {
   const source = process.env.DATABASE_URL;
   if (!source)
     throw new Error('DATABASE_URL is required for integration tests.');
+  const coverage = process.argv.includes('--coverage');
   const name = `logfy_test_${randomBytes(8).toString('hex')}`;
   const url = new URL(source);
   url.pathname = `/${name}`;
@@ -30,11 +31,10 @@ async function main() {
     });
     if (migration.status !== 0)
       throw new Error('Test database migrations failed.');
-    const result = spawnSync(
-      'npx',
-      ['tsx', '--test', 'tests/integration/routing.test.ts', 'tests/integration/redis.test.ts'],
-      { env, stdio: 'inherit' },
-    );
+    const args = coverage
+      ? ['vitest', 'run', '--coverage']
+      : ['vitest', 'run', '--project', 'integration'];
+    const result = spawnSync('npx', args, { env, stdio: 'inherit' });
     process.exitCode = result.status ?? 1;
   } finally {
     if (created) await client.query(`DROP DATABASE "${name}" WITH (FORCE)`);

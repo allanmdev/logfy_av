@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, onTestFinished } from 'vitest';
 import { Prisma } from '@prisma/client';
 
-import { PrismaAccountRepository } from '../src/modules/accounts/infrastructure/repositories/prisma-account.repository';
-import { prisma } from '../src/shared/database/prisma';
-import { AppError } from '../src/shared/errors/app-error';
+import { PrismaAccountRepository } from '../../src/modules/accounts/infrastructure/repositories/prisma-account.repository';
+import { prisma } from '../../src/shared/database/prisma';
+import { AppError } from '../../src/shared/errors/app-error';
 
 const repository = new PrismaAccountRepository();
 
@@ -13,7 +13,7 @@ for (const operation of ['create', 'update'] as const) {
     ? repository.create({ name: 'Account', slug: 'reserved' })
     : repository.update('account-id', { slug: 'reserved' });
 
-  test(`${operation}: a database uniqueness conflict returns 409`, async (t) => {
+  test(`${operation}: a database uniqueness conflict returns 409`, async () => {
     const error = new Prisma.PrismaClientKnownRequestError('Duplicate slug', {
       code: 'P2002',
       clientVersion: '7.10.0',
@@ -27,9 +27,10 @@ for (const operation of ['create', 'update'] as const) {
         },
       },
     });
-    const original = prisma.account[operation];
-    prisma.account[operation] = (() => Promise.reject(error)) as typeof original;
-    t.after(() => { prisma.account[operation] = original; });
+    const delegate = prisma.account as unknown as Record<string, unknown>;
+    const original = delegate[operation];
+    delegate[operation] = () => Promise.reject(error);
+    onTestFinished(() => { delegate[operation] = original; });
 
     await assert.rejects(execute, (actual: unknown) => {
       assert.ok(actual instanceof AppError);
@@ -41,11 +42,12 @@ for (const operation of ['create', 'update'] as const) {
     });
   });
 
-  test(`${operation}: unexpected database errors are preserved`, async (t) => {
+  test(`${operation}: unexpected database errors are preserved`, async () => {
     const error = new Error('Database unavailable');
-    const original = prisma.account[operation];
-    prisma.account[operation] = (() => Promise.reject(error)) as typeof original;
-    t.after(() => { prisma.account[operation] = original; });
+    const delegate = prisma.account as unknown as Record<string, unknown>;
+    const original = delegate[operation];
+    delegate[operation] = () => Promise.reject(error);
+    onTestFinished(() => { delegate[operation] = original; });
     await assert.rejects(execute, (actual: unknown) => actual === error);
   });
 }

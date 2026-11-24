@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, onTestFinished } from 'vitest';
 import express from 'express';
-import { accountRouter } from '../src/modules/accounts/presentation/http/account.routes';
-import { errorHandler } from '../src/shared/http/middlewares/error-handler';
-import { prisma } from '../src/shared/database/prisma';
+import { accountRouter } from '../../src/modules/accounts/presentation/http/account.routes';
+import { errorHandler } from '../../src/shared/http/middlewares/error-handler';
+import { prisma } from '../../src/shared/database/prisma';
 
-test('GET accounts filters deleted records, paginates, and validates query parameters', async (t) => {
+test('GET accounts filters deleted records, paginates, and validates query parameters', async () => {
   const calls: any[] = [];
   const originals = {
     findMany: prisma.account.findMany,
@@ -24,7 +24,7 @@ test('GET accounts filters deleted records, paginates, and validates query param
   }) as any;
   prisma.account.count = (async (args: any) => filtered(args.where).length) as any;
   prisma.$transaction = ((queries: any[]) => Promise.all(queries)) as any;
-  t.after(() => {
+  onTestFinished(() => {
     prisma.account.findMany = originals.findMany;
     prisma.account.count = originals.count;
     prisma.$transaction = originals.transaction;
@@ -35,7 +35,7 @@ test('GET accounts filters deleted records, paginates, and validates query param
   app.use(errorHandler);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
-  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  onTestFinished(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const url = `http://127.0.0.1:${address.port}/v1/accounts`;

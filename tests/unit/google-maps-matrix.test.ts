@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { GoogleMapsDistanceMatrixProvider } from "../src/modules/routing/infrastructure/providers/google-maps-distance-matrix.provider";
-import { AppError } from "../src/shared/errors/app-error";
+import { test } from 'vitest';
+import { GoogleMapsDistanceMatrixProvider } from "../../src/modules/routing/infrastructure/providers/google-maps-distance-matrix.provider";
+import { AppError } from "../../src/shared/errors/app-error";
 
 const points = [
   { latitude: -23, longitude: -46 },

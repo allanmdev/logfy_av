@@ -1,21 +1,25 @@
 import assert from "node:assert/strict";
-import { mock, test, TestContext } from "node:test";
-import { CreateRoutePlanUseCase } from "../src/modules/route-plans/application/use-cases/create-route-plan.use-case";
-import { RoutePlanRepository } from "../src/modules/route-plans/domain/repositories/route-plan.repository";
-import { CreateDeliveryUseCase } from "../src/modules/deliveries/application/use-cases/create-delivery.use-case";
-import { DeliveryRepository } from "../src/modules/deliveries/domain/repositories/delivery.repository";
-import { OptimizeRoutePlanUseCase } from "../src/modules/routing/application/use-cases/optimize-route-plan.use-case";
-import { DistanceMatrixProvider } from "../src/modules/routing/application/ports/distance-matrix.provider";
-import { OptimizationRepository } from "../src/modules/routing/domain/repositories/optimization.repository";
+import { test, vi } from "vitest";
+import { CreateRoutePlanUseCase } from "../../src/modules/route-plans/application/use-cases/create-route-plan.use-case";
+import { RoutePlan } from "../../src/modules/route-plans/domain/entities/route-plan.entity";
+import { RoutePlanRepository } from "../../src/modules/route-plans/domain/repositories/route-plan.repository";
+import { CreateDeliveryUseCase } from "../../src/modules/deliveries/application/use-cases/create-delivery.use-case";
+import { DeliveryRepository } from "../../src/modules/deliveries/domain/repositories/delivery.repository";
+import { OptimizeRoutePlanUseCase } from "../../src/modules/routing/application/use-cases/optimize-route-plan.use-case";
+import { DistanceMatrixProvider } from "../../src/modules/routing/application/ports/distance-matrix.provider";
+import { OptimizationRepository } from "../../src/modules/routing/domain/repositories/optimization.repository";
 import {
   DistanceMatrix,
   OptimizationSnapshot,
   OptimizedRoute,
-} from "../src/modules/routing/domain/entities/optimization.entity";
-import { CheapestInsertionOptimizer } from "../src/modules/routing/infrastructure/optimization/cheapest-insertion.optimizer";
+} from "../../src/modules/routing/domain/entities/optimization.entity";
+import { CheapestInsertionOptimizer } from "../../src/modules/routing/infrastructure/optimization/cheapest-insertion.optimizer";
 
 const now = new Date("2026-09-24T08:00:00.000Z");
 const accountId = "transportadora-teste";
+const diagnostic = (message: string) => {
+  if (process.env.LOGFY_TEST_VERBOSE) console.info(message);
+};
 const unused = async (): Promise<never> => {
   throw new Error("Operação inesperada");
 };
@@ -23,18 +27,23 @@ const unused = async (): Promise<never> => {
 function creationFixture() {
   let planSequence = 0;
   let deliverySequence = 0;
-  const createPlan = mock.fn<RoutePlanRepository["create"]>(
-    async (owner, data) => ({
-      ...data,
-      id: `plan-${++planSequence}`,
-      accountId: owner,
-      status: "draft",
-      version: 0,
-      createdAt: now,
-      updatedAt: now,
-    }),
+  const plansById = new Map<string, RoutePlan>();
+  const createPlan = vi.fn<RoutePlanRepository["create"]>(
+    async (owner, data) => {
+      const plan: RoutePlan = {
+        ...data,
+        id: `plan-${++planSequence}`,
+        accountId: owner,
+        status: "draft",
+        version: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      plansById.set(`${owner}:${plan.id}`, plan);
+      return plan;
+    },
   );
-  const createDelivery = mock.fn<DeliveryRepository["create"]>(
+  const createDelivery = vi.fn<DeliveryRepository["create"]>(
     async (owner, routePlanId, data) => ({
       ...data,
       id: `delivery-${++deliverySequence}`,
@@ -54,13 +63,25 @@ function creationFixture() {
       update: unused,
       delete: unused,
     }),
-    deliveries: new CreateDeliveryUseCase({
-      create: createDelivery,
-      findById: unused,
-      findMany: unused,
-      update: unused,
-      delete: unused,
-    }),
+    deliveries: new CreateDeliveryUseCase(
+      {
+        create: createDelivery,
+        findById: unused,
+        findByReference: async () => null,
+        countByRoutePlan: async () => 0,
+        findMany: unused,
+        update: unused,
+        delete: unused,
+      },
+      {
+        create: unused,
+        findById: async (owner, id) => plansById.get(`${owner}:${id}`) ?? null,
+        findMany: unused,
+        update: unused,
+        delete: unused,
+      },
+      100,
+    ),
   };
 }
 
@@ -111,7 +132,6 @@ async function journeyFixture() {
 }
 
 function simulate(
-  t: TestContext,
   snapshot: OptimizationSnapshot,
   matrix: DistanceMatrix,
   ids: string[],
@@ -135,7 +155,7 @@ function simulate(
       timestamp: new Date(now.getTime() + elapsed * 1000).toISOString(),
     };
     events.push(entry);
-    t.diagnostic(JSON.stringify(entry));
+    diagnostic(JSON.stringify(entry));
   };
   log("saida_do_deposito");
   for (const id of ids) {
@@ -158,7 +178,7 @@ function simulate(
   elapsed += back.durationSeconds;
   distance += back.distanceMeters;
   log("retorno_ao_deposito");
-  t.diagnostic(
+  diagnostic(
     JSON.stringify({
       driver: "Ana",
       distanceMeters: distance,
@@ -198,17 +218,17 @@ test("cria várias rotas com entregas vinculadas à conta e ao plano correto", a
       );
       assert.equal(delivery.routePlanId, plan.id);
       assert.equal(delivery.accountId, accountId);
-      assert.deepEqual(fixture.createDelivery.mock.calls.at(-1)!.arguments, [
+      assert.deepEqual(fixture.createDelivery.mock.calls.at(-1)!, [
         accountId,
         plan.id,
         input,
       ]);
     }
   }
-  assert.equal(fixture.createPlan.mock.callCount(), 3);
-  assert.equal(fixture.createDelivery.mock.callCount(), 12);
+  assert.equal(fixture.createPlan.mock.calls.length, 3);
+  assert.equal(fixture.createDelivery.mock.calls.length, 12);
   assert.deepEqual(
-    fixture.createPlan.mock.calls.map((call) => call.arguments),
+    fixture.createPlan.mock.calls,
     ["Norte", "Sul", "Centro"].map((name) => [
       accountId,
       { name, depotLatitude: -26.3, depotLongitude: -48.8 },
@@ -216,10 +236,10 @@ test("cria várias rotas com entregas vinculadas à conta e ao plano correto", a
   );
 });
 
-test("simula Ana fazendo entregas na ordem de cadastro com logs de cada etapa", async (t) => {
+test("simula Ana fazendo entregas na ordem de cadastro com logs de cada etapa", async () => {
   const { snapshot, matrix } = await journeyFixture();
   const ids = snapshot.deliveries.map((delivery) => delivery.id);
-  const journey = simulate(t, snapshot, matrix, ids);
+  const journey = simulate(snapshot, matrix, ids);
   assert.deepEqual(
     journey.events.map((entry) => entry.event),
     [
@@ -248,12 +268,12 @@ test("simula Ana fazendo entregas na ordem de cadastro com logs de cada etapa", 
   assert.equal(journey.events.at(-1)!.timestamp, "2026-09-24T08:16:20.000Z");
 });
 
-test("otimiza a jornada de entregas e reduz distância e tempo com logs", async (t) => {
+test("otimiza a jornada de entregas e reduz distância e tempo com logs", async () => {
   const { snapshot, matrix } = await journeyFixture();
-  const loadSnapshot = mock.fn<OptimizationRepository["loadSnapshot"]>(
+  const loadSnapshot = vi.fn<OptimizationRepository["loadSnapshot"]>(
     async () => snapshot,
   );
-  const save = mock.fn<OptimizationRepository["save"]>(
+  const save = vi.fn<OptimizationRepository["save"]>(
     async (input, result) => ({
       id: "optimization-1",
       accountId: input.plan.accountId,
@@ -262,7 +282,7 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
       result,
     }),
   );
-  const compute = mock.fn<DistanceMatrixProvider["compute"]>(
+  const compute = vi.fn<DistanceMatrixProvider["compute"]>(
     async () => matrix,
   );
   const useCase = new OptimizeRoutePlanUseCase(
@@ -278,13 +298,13 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
     ["van-ana"],
     gasolineEfficiencyKmPerLiter,
   );
-  assert.deepEqual(loadSnapshot.mock.calls[0]!.arguments, [
+  assert.deepEqual(loadSnapshot.mock.calls[0]!, [
     accountId,
     snapshot.plan.id,
     ["van-ana"],
     100,
   ]);
-  assert.deepEqual(compute.mock.calls[0]!.arguments, [
+  assert.deepEqual(compute.mock.calls[0]!, [
     [
       {
         latitude: snapshot.plan.depotLatitude,
@@ -296,8 +316,8 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
       })),
     ],
   ]);
-  assert.equal(save.mock.callCount(), 1);
-  assert.deepEqual(save.mock.calls[0]!.arguments, [snapshot, optimized.result]);
+  assert.equal(save.mock.calls.length, 1);
+  assert.deepEqual(save.mock.calls[0]!, [snapshot, optimized.result]);
   assert.equal(optimized.result.routes.length, 1);
   const route: OptimizedRoute = optimized.result.routes[0]!;
   const ids = route.stops.map((stop) => stop.deliveryId);
@@ -313,12 +333,11 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
     [1, 2, 3],
   );
   const baseline = simulate(
-    t,
     snapshot,
     matrix,
     snapshot.deliveries.map((delivery) => delivery.id),
   );
-  const journey = simulate(t, snapshot, matrix, ids);
+  const journey = simulate(snapshot, matrix, ids);
   const savedSeconds = baseline.elapsed - journey.elapsed;
   const savedPercentage = (savedSeconds / baseline.elapsed) * 100;
   const gasolineWithoutOptimizationLiters =
@@ -364,29 +383,29 @@ test("otimiza a jornada de entregas e reduz distância e tempo com logs", async 
       .filter((entry) => entry.event === "chegada")
       .map((entry) => entry.elapsed),
   );
-  t.diagnostic(
+  diagnostic(
     `Tempo da rota sem otimização: ${formatDuration(baseline.elapsed)} (${baseline.elapsed}s)`,
   );
-  t.diagnostic(
+  diagnostic(
     `Tempo da rota com otimização: ${formatDuration(journey.elapsed)} (${journey.elapsed}s)`,
   );
-  t.diagnostic(
+  diagnostic(
     `Economia de tempo: ${formatDuration(savedSeconds)} (${savedPercentage.toFixed(2)}%)`,
   );
-  t.diagnostic("Tempos simulados incluem deslocamento, atendimento e retorno ao depósito.");
-  t.diagnostic(
+  diagnostic("Tempos simulados incluem deslocamento, atendimento e retorno ao depósito.");
+  diagnostic(
     `Consumo estimado de gasolina considerando ${gasolineEfficiencyKmPerLiter} km/l constantes.`,
   );
-  t.diagnostic(
+  diagnostic(
     `Gasolina sem otimização: ${gasolineWithoutOptimizationLiters.toFixed(2)} L`,
   );
-  t.diagnostic(
+  diagnostic(
     `Gasolina com otimização: ${gasolineWithOptimizationLiters.toFixed(2)} L`,
   );
-  t.diagnostic(
+  diagnostic(
     `Economia de gasolina: ${savedGasolineLiters.toFixed(2)} L (${savedGasolinePercentage.toFixed(2)}%)`,
   );
-  t.diagnostic(
+  diagnostic(
     JSON.stringify({
       durationWithoutOptimizationSeconds: baseline.elapsed,
       durationWithOptimizationSeconds: journey.elapsed,

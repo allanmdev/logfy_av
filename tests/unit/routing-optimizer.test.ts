@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { CheapestInsertionOptimizer } from '../src/modules/routing/infrastructure/optimization/cheapest-insertion.optimizer';
+import { test } from 'vitest';
+import { CheapestInsertionOptimizer } from '../../src/modules/routing/infrastructure/optimization/cheapest-insertion.optimizer';
 import {
   DistanceMatrix,
   OptimizationSnapshot,
-} from '../src/modules/routing/domain/entities/optimization.entity';
-import { AppError } from '../src/shared/errors/app-error';
-import { OptimizeRoutePlanUseCase } from '../src/modules/routing/application/use-cases/optimize-route-plan.use-case';
-import { OptimizationRepository } from '../src/modules/routing/domain/repositories/optimization.repository';
+} from '../../src/modules/routing/domain/entities/optimization.entity';
+import { AppError } from '../../src/shared/errors/app-error';
+import { OptimizeRoutePlanUseCase } from '../../src/modules/routing/application/use-cases/optimize-route-plan.use-case';
+import { OptimizationRepository } from '../../src/modules/routing/domain/repositories/optimization.repository';
 
 const now = new Date();
 function snapshot(demands = [2, 3], capacities = [5]): OptimizationSnapshot {
