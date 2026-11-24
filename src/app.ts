@@ -3,6 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
+import swaggerUi from 'swagger-ui-express';
 
 import { apiRouter } from './shared/http/routes';
 import { errorHandler } from './shared/http/middlewares/error-handler';
@@ -15,6 +16,7 @@ import { RedisRateLimitStore } from './shared/redis/redis-rate-limit-store';
 import { RateLimitStore } from './shared/security/rate-limit-store';
 import { rateLimit } from './shared/http/middlewares/rate-limit';
 import { logger } from './shared/logger/logger';
+import { openApiDocument } from './docs/openapi';
 
 export function createApp(options: { rateLimitStore?: RateLimitStore; readiness?: () => Promise<unknown> } = {}) {
   const app = express();
@@ -22,6 +24,18 @@ export function createApp(options: { rateLimitStore?: RateLimitStore; readiness?
   app.disable('x-powered-by');
   app.set('trust proxy', env.TRUST_PROXY ? env.TRUST_PROXY.split(',').map((value) => value.trim()) : false);
   app.use(requestId);
+
+  app.get('/api-docs.json', (_req, res) => {
+    res.json(openApiDocument);
+  });
+  app.use(
+    '/api-docs',
+    helmet({ contentSecurityPolicy: { directives: { upgradeInsecureRequests: null } } }),
+    swaggerUi.serve,
+    swaggerUi.setup(openApiDocument, {
+      customSiteTitle: 'Logfy API - Documentação',
+    }),
+  );
 
   app.use(helmet());
 
