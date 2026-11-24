@@ -1,307 +1,635 @@
 # Logfy API
 
-API multi-tenant em Node.js, TypeScript, Express e Prisma/PostgreSQL. Cada API Key identifica uma Account; os recursos de roteirização usam exclusivamente a conta autenticada.
+API REST de **roteirização de entregas** desenvolvida em Node.js, TypeScript, Express e PostgreSQL.
 
-## Configuração
+## 1. Nome e descrição do projeto
+
+**Domínio:** logística de última milha (entregas urbanas).
+
+**Problema:** transportadoras e empresas com frota própria costumam montar as rotas do dia manualmente, na ordem em que os pedidos chegam. Isso gera trajetos mais longos, mais tempo de motorista e mais combustível.
+
+**Objetivo da API:** permitir que cada empresa cadastre sua **frota de veículos**, seus **planos de rota** (com o depósito de saída) e as **entregas** de cada plano, e então solicite a **otimização** da rota, que distribui as entregas entre os veículos respeitando a capacidade e compara distância, tempo e combustível com a rota original.
+
+A API é multiempresa: cada empresa (`account`) acessa somente os próprios dados por meio de uma API Key.
+
+## 2. Integrantes da equipe
+
+| Nome completo |
+| --- |
+| Allan Camargo |
+
+## 3. Tecnologias utilizadas
+
+| Tecnologia | Uso |
+| --- | --- |
+| Node.js 22 | Ambiente de execução |
+| TypeScript | Tipagem estática |
+| Express 5 | Servidor HTTP e rotas |
+| PostgreSQL 16 | Banco de dados relacional |
+| Prisma ORM | Acesso ao banco, migrations e geração do cliente |
+| Zod | Validação dos dados recebidos |
+| Redis | Rate limit distribuído |
+| Vitest | Testes unitários, de integração e cobertura (`@vitest/coverage-v8`) |
+| Supertest | Requisições HTTP nos testes de integração |
+| Swagger UI / OpenAPI 3 | Documentação interativa (`swagger-ui-express`) |
+| Helmet, CORS, Pino | Segurança HTTP e logs estruturados |
+| Docker Compose | PostgreSQL e Redis locais |
+| Git e GitHub Actions | Versionamento e integração contínua |
+
+> A persistência usa PostgreSQL. O projeto funciona com qualquer instância PostgreSQL, inclusive a do Supabase: basta apontar `DATABASE_URL` para ela.
+
+## 4. Entidades e relacionamentos
+
+As três entidades principais do domínio possuem CRUD completo:
+
+| Entidade | Tabela | Principais atributos |
+| --- | --- | --- |
+| **Vehicle** (veículo) | `vehicles` | `id` (UUID), `accountId`, `name`, `capacity`, `active`, `createdAt`, `updatedAt` |
+| **RoutePlan** (plano de rota) | `route_plans` | `id` (UUID), `accountId`, `name`, `depotLatitude`, `depotLongitude`, `status` (`draft`/`optimized`), `version`, `createdAt`, `updatedAt` |
+| **Delivery** (entrega) | `deliveries` | `id` (UUID), `accountId`, `routePlanId`, `reference`, `latitude`, `longitude`, `demand`, `serviceDurationSeconds`, `createdAt`, `updatedAt` |
+
+Entidades de apoio:
+
+| Entidade | Tabela | Papel |
+| --- | --- | --- |
+| **Account** (empresa) | `accounts` | Dona de todos os dados. CRUD administrativo com exclusão lógica (`deletedAt`). |
+| **ApiKey** | `api_keys` | Credencial da empresa. Armazena apenas o hash SHA-256 da chave. |
+| **RouteOptimization** | `route_optimizations` | Último resultado de otimização de um plano (JSONB). |
+
+Relacionamentos:
+
+```
+Account 1 ──── N Vehicle
+Account 1 ──── N RoutePlan 1 ──── N Delivery
+                     RoutePlan 1 ──── 0..1 RouteOptimization
+Account 1 ──── N ApiKey
+```
+
+- `vehicles.accountId` → `accounts.id` (FK, `ON DELETE CASCADE`)
+- `route_plans.accountId` → `accounts.id` (FK, `ON DELETE CASCADE`)
+- `deliveries.(routePlanId, accountId)` → `route_plans.(id, accountId)` (FK composta, `ON DELETE CASCADE`): garante no banco que a entrega pertence a um plano da mesma empresa
+- `route_optimizations.(routePlanId, accountId)` → `route_plans.(id, accountId)` (FK composta, `ON DELETE CASCADE`)
+- `api_keys.accountId` → `accounts.id` (FK, `ON DELETE CASCADE`)
+
+## 5. Regras de negócio
+
+As regras ficam na camada de serviços (`application/use-cases`) e em objetos de domínio, e não nos controllers ou repositórios.
+
+**Veículos**
+1. O nome do veículo é único dentro da empresa, sem diferenciar maiúsculas de minúsculas (`409 VEHICLE_NAME_ALREADY_EXISTS`).
+2. A capacidade deve ser um número inteiro positivo (`422`).
+3. Veículos novos são criados como ativos (`active = true`); apenas veículos ativos podem ser usados na otimização.
+
+**Planos de rota**
+4. O depósito precisa de coordenadas válidas (latitude entre -90 e 90, longitude entre -180 e 180) e não pode ser `(0, 0)`, que não representa um endereço real (`422 INVALID_COORDINATE`). A validação é feita pelo objeto de valor `Coordinate`.
+5. Todo plano nasce como `draft`. Qualquer alteração no plano ou nas suas entregas volta o plano para `draft`, incrementa `version` e descarta a otimização anterior, na mesma transação.
+6. Excluir um plano exclui suas entregas e sua otimização em cascata.
+
+**Entregas**
+7. A entrega só pode ser criada em um plano existente da própria empresa (`404 ROUTE_PLAN_NOT_FOUND`).
+8. A referência (`reference`) é única dentro do plano (`409 DELIVERY_REFERENCE_ALREADY_EXISTS`).
+9. A entrega não pode estar na mesma coordenada do depósito do plano (`422 DELIVERY_AT_DEPOT`).
+10. Um plano aceita no máximo `ROUTING_MAX_DELIVERIES` entregas (padrão 100) (`422 ROUTE_PLAN_DELIVERY_LIMIT_REACHED`).
+11. A demanda deve ser inteira e positiva; o tempo de atendimento vai de 0 a 86400 segundos (padrão 0).
+
+**Otimização**
+12. Só é possível otimizar um plano com entregas (`422 EMPTY_ROUTE_PLAN`), usando de 1 a 100 veículos ativos e distintos.
+13. A soma das capacidades deve atender à soma das demandas e nenhuma entrega pode ser maior que o maior veículo (`422 INSUFFICIENT_CAPACITY`).
+14. Se o plano ou os veículos mudarem durante o cálculo, o resultado não é salvo (`409 CONCURRENT_MODIFICATION`).
+
+**Segurança e isolamento**
+15. Cada empresa só enxerga os próprios dados: identificadores de outra empresa retornam `404`.
+16. Leituras exigem o scope `routing:read`; criação, alteração, exclusão e otimização exigem `routing:write` (`403`).
+17. Chaves revogadas ou expiradas e empresas suspensas, inativas ou excluídas recebem `401`.
+
+## 6. Estrutura do projeto
+
+O projeto é organizado por módulos de domínio. Cada módulo segue a mesma divisão em camadas:
+
+```
+src/
+├── app.ts                         # Configuração do Express (middlewares, Swagger, rotas)
+├── server.ts                      # Inicialização do servidor e encerramento gracioso
+├── config/
+│   └── env.ts                     # Leitura e validação das variáveis de ambiente
+├── docs/
+│   └── openapi.ts                 # Especificação OpenAPI usada pelo Swagger
+├── modules/
+│   ├── vehicles/
+│   │   ├── domain/
+│   │   │   ├── entities/          # Models: interfaces das entidades
+│   │   │   └── repositories/      # Contratos (interfaces) dos repositórios
+│   │   ├── application/
+│   │   │   ├── dto/               # Dados de entrada dos serviços
+│   │   │   └── use-cases/         # Services: regras de negócio
+│   │   ├── infrastructure/
+│   │   │   └── repositories/      # Repositories: implementação com Prisma
+│   │   └── presentation/http/
+│   │       ├── *.controller.ts    # Controllers: HTTP → serviço → resposta JSON
+│   │       ├── *.routes.ts        # Routes: métodos, caminhos e middlewares
+│   │       └── *.schemas.ts       # Validação Zod do corpo, parâmetros e query
+│   ├── route-plans/               # Mesma estrutura
+│   ├── deliveries/                # Mesma estrutura
+│   ├── accounts/                  # Mesma estrutura
+│   ├── api-keys/                  # Mesma estrutura
+│   └── routing/                   # Otimização: portas, algoritmo e provedor Google
+└── shared/
+    ├── auth/                      # Contexto de autenticação e scopes
+    ├── container/                 # Injeção de dependências (composição das classes)
+    ├── database/                  # Cliente Prisma e tradução de erros do banco
+    ├── domain/                    # Objetos de domínio compartilhados (Coordinate, paginação)
+    ├── errors/                    # AppError (erro de aplicação com código HTTP)
+    ├── http/                      # Middlewares (validação, erros, auth, rate limit)
+    ├── logger/                    # Logger Pino
+    ├── redis/                     # Cliente Redis e store do rate limit
+    └── security/                  # Contratos de segurança
+prisma/
+├── schema.prisma                  # Modelo do banco
+└── migrations/                    # Histórico de migrations
+database/
+└── schema.sql                     # Script SQL completo da estrutura do banco
+tests/
+├── unit/                          # Testes unitários (sem banco)
+│   └── services/                  # Regras de negócio dos serviços com mocks
+├── integration/                   # Testes de integração (Supertest + PostgreSQL)
+├── support/                       # Fábricas de dados, mocks e utilitários de teste
+└── run-integration.ts             # Cria banco temporário, aplica migrations e roda os testes
+```
+
+**Correspondência com as camadas da disciplina**
+
+| Camada | Onde está no projeto |
+| --- | --- |
+| Models | `modules/*/domain/entities` e `shared/domain` |
+| Controllers | `modules/*/presentation/http/*.controller.ts` |
+| Services | `modules/*/application/use-cases` (uma classe por operação) |
+| Repositories | contrato em `domain/repositories`, implementação em `infrastructure/repositories` |
+| Routes | `modules/*/presentation/http/*.routes.ts` e `shared/http/routes.ts` |
+
+**Orientação a Objetos**
+
+- Cada serviço, repositório e controller é uma classe com responsabilidade única.
+- As dependências são recebidas pelo construtor (injeção de dependência) e declaradas como `private readonly` (encapsulamento). Os serviços dependem de interfaces, não do Prisma, o que permite testá-los com mocks.
+- `Coordinate` é um objeto de valor com construtor privado: só é criado por `Coordinate.create`, que valida a coordenada, e expõe o comportamento `equals`.
+- `VehicleNamePolicy` e `DeliveryPolicy` agrupam regras reutilizadas pelos serviços de criação e atualização.
+- `AppError` estende `Error` (herança) e carrega código e status HTTP.
+- Os repositórios Prisma implementam as interfaces do domínio (`implements`), o que permite trocar a persistência sem alterar os serviços.
+
+## 7. Configuração e execução
+
+Pré-requisitos: Node.js 22+, npm e Docker (ou um PostgreSQL 13+ e um Redis próprios).
+
+```sh
+git clone <url-do-repositorio> logfy_av
+cd logfy_av
+npm install
+cp .env.example .env
+docker compose up -d --wait
+npx prisma generate
+npm run db:migrate
+npm run dev
+```
+
+1. Edite o `.env` e defina `ADMIN_API_KEY` com um valor aleatório de pelo menos 32 caracteres (por exemplo, `openssl rand -hex 32`).
+2. `docker compose up -d --wait` sobe PostgreSQL e Redis locais com os mesmos valores do `.env.example`.
+3. `npm run db:migrate` aplica as migrations em `prisma/migrations`.
+4. A API inicia em `http://localhost:3000`. A documentação fica em `http://localhost:3000/api-docs`.
+
+Para produção:
+
+```sh
+npm run build
+npm start
+```
+
+### Primeiro acesso
+
+Os endpoints de veículos, planos e entregas exigem uma API Key. Crie uma empresa e uma chave com a credencial administrativa:
+
+```sh
+curl -X POST http://localhost:3000/v1/accounts \
+  -H "Content-Type: application/json" -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -d '{"name":"Transportadora Joinville","slug":"transportadora-joinville"}'
+
+curl -X POST http://localhost:3000/v1/accounts/<ACCOUNT_ID>/api-keys \
+  -H "Content-Type: application/json" -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -d '{"name":"Integração","scopes":["routing:read","routing:write"]}'
+```
+
+Use o campo `data.key` da resposta no header `X-API-Key`. A chave completa só aparece nessa resposta.
+
+## 8. Variáveis de ambiente
+
+O arquivo [.env.example](.env.example) traz todas as variáveis com valores de exemplo. O `.env` real está no `.gitignore` e não deve ser versionado.
+
+| Variável | Obrigatória | Padrão | Descrição |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | Sim | – | URL de conexão do PostgreSQL |
+| `ADMIN_API_KEY` | Para administração | – | Credencial dos endpoints `/v1/accounts` (mínimo 32 caracteres) |
+| `NODE_ENV` | Não | `development` | `development`, `test` ou `production` |
+| `PORT` | Não | `3000` | Porta HTTP |
+| `LOG_LEVEL` | Não | `info` | Nível de log do Pino |
+| `REDIS_URL` | Não | `redis://127.0.0.1:6379` | Redis usado pelo rate limit |
+| `RATE_LIMIT_MAX` | Não | `120` | Requisições por IP na janela |
+| `RATE_LIMIT_WINDOW_MS` | Não | `60000` | Duração da janela do rate limit |
+| `CORS_ORIGINS` | Não | vazio | Origens permitidas, separadas por vírgula |
+| `TRUST_PROXY` | Não | vazio | Proxies confiáveis, separados por vírgula |
+| `GOOGLE_MAPS_API_KEY` | Para otimizar | – | Chave da Google Routes API. Sem ela, a otimização retorna `503`; os cadastros funcionam normalmente |
+| `GOOGLE_MAPS_TIMEOUT_MS` | Não | `10000` | Timeout das chamadas ao Google |
+| `ROUTING_MAX_DELIVERIES` | Não | `100` | Máximo de entregas por plano (1 a 500) |
+
+## 9. Banco de dados
+
+Todas as tabelas usam **UUID** como chave primária, gerado pelo PostgreSQL (`gen_random_uuid()`).
+
+A estrutura pode ser reproduzida de duas formas:
+
+- **Migrations (recomendado):** `npm run db:migrate`
+- **Script SQL:** execute [database/schema.sql](database/schema.sql) em um banco vazio, por exemplo `psql "$DATABASE_URL" -f database/schema.sql`
+
+### Tabelas
+
+**accounts**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK, default `gen_random_uuid()` |
+| name | TEXT | NOT NULL |
+| slug | TEXT | NOT NULL, UNIQUE |
+| status | AccountStatus (`ACTIVE`, `SUSPENDED`, `INACTIVE`) | NOT NULL, default `ACTIVE` |
+| createdAt / updatedAt | TIMESTAMP(3) | NOT NULL |
+| deletedAt | TIMESTAMP(3) | NULL (exclusão lógica) |
+
+**vehicles**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK |
+| accountId | UUID | NOT NULL, FK → accounts.id (CASCADE) |
+| name | TEXT | NOT NULL |
+| capacity | INTEGER | NOT NULL |
+| active | BOOLEAN | NOT NULL, default `true` |
+| createdAt / updatedAt | TIMESTAMP(3) | NOT NULL |
+
+Índice: (`accountId`, `active`).
+
+**route_plans**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK |
+| accountId | UUID | NOT NULL, FK → accounts.id (CASCADE) |
+| name | TEXT | NOT NULL |
+| depotLatitude / depotLongitude | DOUBLE PRECISION | NOT NULL |
+| status | RoutePlanStatus (`DRAFT`, `OPTIMIZED`) | NOT NULL, default `DRAFT` |
+| version | INTEGER | NOT NULL, default 0 |
+| createdAt / updatedAt | TIMESTAMP(3) | NOT NULL |
+
+Índices: UNIQUE (`id`, `accountId`), (`accountId`, `createdAt`).
+
+**deliveries**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK |
+| accountId | UUID | NOT NULL |
+| routePlanId | UUID | NOT NULL; (`routePlanId`, `accountId`) FK → route_plans.(id, accountId) (CASCADE) |
+| reference | TEXT | NOT NULL; UNIQUE (`routePlanId`, `reference`) |
+| latitude / longitude | DOUBLE PRECISION | NOT NULL |
+| demand | INTEGER | NOT NULL |
+| serviceDurationSeconds | INTEGER | NOT NULL, default 0 |
+| createdAt / updatedAt | TIMESTAMP(3) | NOT NULL |
+
+**api_keys**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK |
+| accountId | UUID | NOT NULL, FK → accounts.id (CASCADE) |
+| name, prefix | TEXT | NOT NULL |
+| keyHash | TEXT | NOT NULL, UNIQUE (hash SHA-256) |
+| scopes | TEXT[] | |
+| lastUsedAt, expiresAt, revokedAt | TIMESTAMP(3) | NULL |
+| createdAt / updatedAt | TIMESTAMP(3) | NOT NULL |
+
+**route_optimizations**
+
+| Coluna | Tipo | Restrições |
+| --- | --- | --- |
+| id | UUID | PK |
+| accountId | UUID | NOT NULL |
+| routePlanId | UUID | NOT NULL, UNIQUE; (`routePlanId`, `accountId`) FK → route_plans.(id, accountId) (CASCADE) |
+| result | JSONB | NOT NULL |
+| createdAt | TIMESTAMP(3) | NOT NULL |
+
+> A migration `use_uuid_identifiers` converteu os identificadores antigos (CUID em TEXT) para UUID mantendo os dados e os relacionamentos existentes.
+
+## 10. Endpoints da API
+
+Todos os caminhos começam com `/v1`. Corpo e respostas usam JSON. Sucesso: `{ "data": ... }`. Listagens: `{ "data": [...], "pagination": { "page", "limit", "total", "totalPages" } }` com os parâmetros `page` (padrão 1) e `limit` (padrão 20, máximo 100). Erro: `{ "error": { "code", "message", "details", "request_id" } }`.
+
+`PUT` substitui todos os campos do recurso (corpo completo); `PATCH` altera apenas os campos enviados.
+
+### Veículos (header `X-API-Key`)
+
+| Método | Endpoint | Descrição | Sucesso |
+| --- | --- | --- | --- |
+| GET | `/vehicles` | Lista os veículos da empresa | 200 |
+| GET | `/vehicles/:id` | Consulta um veículo | 200 |
+| POST | `/vehicles` | Cadastra um veículo | 201 |
+| PUT | `/vehicles/:id` | Atualiza todos os dados de um veículo | 200 |
+| PATCH | `/vehicles/:id` | Atualiza parte dos dados de um veículo | 200 |
+| DELETE | `/vehicles/:id` | Remove um veículo | 204 |
+
+### Planos de rota (header `X-API-Key`)
+
+| Método | Endpoint | Descrição | Sucesso |
+| --- | --- | --- | --- |
+| GET | `/route-plans` | Lista os planos da empresa | 200 |
+| GET | `/route-plans/:id` | Consulta um plano | 200 |
+| POST | `/route-plans` | Cadastra um plano | 201 |
+| PUT | `/route-plans/:id` | Atualiza todos os dados de um plano | 200 |
+| PATCH | `/route-plans/:id` | Atualiza parte dos dados de um plano | 200 |
+| DELETE | `/route-plans/:id` | Remove o plano, suas entregas e a otimização | 204 |
+
+### Entregas (header `X-API-Key`)
+
+| Método | Endpoint | Descrição | Sucesso |
+| --- | --- | --- | --- |
+| GET | `/route-plans/:routePlanId/deliveries` | Lista as entregas do plano | 200 |
+| GET | `/route-plans/:routePlanId/deliveries/:id` | Consulta uma entrega | 200 |
+| POST | `/route-plans/:routePlanId/deliveries` | Adiciona uma entrega ao plano | 201 |
+| PUT | `/route-plans/:routePlanId/deliveries/:id` | Atualiza todos os dados de uma entrega | 200 |
+| PATCH | `/route-plans/:routePlanId/deliveries/:id` | Atualiza parte dos dados de uma entrega | 200 |
+| DELETE | `/route-plans/:routePlanId/deliveries/:id` | Remove uma entrega | 204 |
+
+### Otimização (header `X-API-Key`)
+
+| Método | Endpoint | Descrição | Sucesso |
+| --- | --- | --- | --- |
+| POST | `/route-plans/:id/optimize` | Calcula e salva a rota otimizada | 200 |
+| GET | `/route-plans/:id/optimization` | Consulta a última otimização válida | 200 |
+
+### Administração (header `X-Admin-Key`)
+
+| Método | Endpoint | Descrição | Sucesso |
+| --- | --- | --- | --- |
+| GET | `/accounts` | Lista empresas (`deleted=all\|true\|false`) | 200 |
+| GET | `/accounts/:id` | Consulta uma empresa | 200 |
+| POST | `/accounts` | Cadastra uma empresa | 201 |
+| PUT | `/accounts/:id` | Atualiza todos os dados de uma empresa | 200 |
+| PATCH | `/accounts/:id` | Atualiza parte dos dados de uma empresa | 200 |
+| DELETE | `/accounts/:id` | Exclui logicamente uma empresa | 204 |
+| GET | `/accounts/:accountId/api-keys` | Lista as chaves da empresa | 200 |
+| POST | `/accounts/:accountId/api-keys` | Emite uma chave | 201 |
+| DELETE | `/accounts/:accountId/api-keys/:apiKeyId` | Revoga uma chave | 204 |
+
+### Públicos
+
+| Método | Endpoint | Descrição |
+| --- | --- | --- |
+| GET | `/health` | Verifica se a API está no ar |
+| GET | `/health/ready` | Verifica PostgreSQL e Redis |
+| GET | `/api-docs` (sem `/v1`) | Swagger UI |
+| GET | `/api-docs.json` (sem `/v1`) | Especificação OpenAPI em JSON |
+
+### Códigos de resposta
+
+| Código | Quando |
+| --- | --- |
+| 200 | Consulta ou atualização concluída |
+| 201 | Registro criado |
+| 204 | Registro removido |
+| 400 | JSON malformado |
+| 401 | Credencial ausente, inválida, revogada ou expirada |
+| 403 | API Key sem o scope necessário |
+| 404 | Recurso inexistente ou de outra empresa |
+| 409 | Conflito de unicidade ou alteração concorrente |
+| 413 | Corpo maior que 1 MB |
+| 422 | Dados inválidos ou regra de negócio violada |
+| 429 | Limite de requisições excedido |
+| 500 | Erro inesperado (sem expor detalhes internos) |
+| 502 / 503 / 504 | Falha, ausência de configuração ou timeout do provedor de mapas |
+
+## 11. Exemplos de requisições
+
+**Cadastrar veículo** – `POST /v1/vehicles`
+
+```json
+{
+  "name": "Van 01",
+  "capacity": 100,
+  "active": true
+}
+```
+
+Resposta `201`:
+
+```json
+{
+  "data": {
+    "id": "6f1d1c2e-4a1b-4c3d-9e8f-7a6b5c4d3e2f",
+    "accountId": "0b9c8f5e-1d2a-4b3c-8d4e-5f6a7b8c9d0e",
+    "name": "Van 01",
+    "capacity": 100,
+    "active": true,
+    "createdAt": "2026-11-24T12:00:00.000Z",
+    "updatedAt": "2026-11-24T12:00:00.000Z"
+  }
+}
+```
+
+**Atualizar veículo** – `PUT /v1/vehicles/:id`
+
+```json
+{
+  "name": "Van 01",
+  "capacity": 120,
+  "active": false
+}
+```
+
+**Cadastrar plano de rota** – `POST /v1/route-plans`
+
+```json
+{
+  "name": "Rota da manhã",
+  "depotLatitude": -26.3044,
+  "depotLongitude": -48.8487
+}
+```
+
+**Atualizar parte do plano** – `PATCH /v1/route-plans/:id`
+
+```json
+{
+  "name": "Rota da tarde"
+}
+```
+
+**Cadastrar entrega** – `POST /v1/route-plans/:routePlanId/deliveries`
+
+```json
+{
+  "reference": "PEDIDO-001",
+  "latitude": -26.2951,
+  "longitude": -48.8458,
+  "demand": 10,
+  "serviceDurationSeconds": 300
+}
+```
+
+**Atualizar entrega** – `PUT /v1/route-plans/:routePlanId/deliveries/:id`
+
+```json
+{
+  "reference": "PEDIDO-001",
+  "latitude": -26.2951,
+  "longitude": -48.8458,
+  "demand": 15,
+  "serviceDurationSeconds": 600
+}
+```
+
+**Otimizar plano** – `POST /v1/route-plans/:id/optimize`
+
+```json
+{
+  "vehicleIds": ["6f1d1c2e-4a1b-4c3d-9e8f-7a6b5c4d3e2f"],
+  "fuelConsumptionKmPerLiter": 10
+}
+```
+
+**Erro de regra de negócio** – entrega na coordenada do depósito (`422`):
+
+```json
+{
+  "error": {
+    "code": "DELIVERY_AT_DEPOT",
+    "message": "A entrega não pode estar na mesma coordenada do depósito.",
+    "request_id": "9b2f1d4e-8c3a-4f5b-a6d7-e8f9a0b1c2d3"
+  }
+}
+```
+
+**Erro de validação** (`422`): campos desconhecidos, tipos errados ou corpo vazio em `PATCH`:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "The request contains invalid data.",
+    "details": { "formErrors": [], "fieldErrors": { "body": ["Too small: expected number to be >0"] } },
+    "request_id": "9b2f1d4e-8c3a-4f5b-a6d7-e8f9a0b1c2d3"
+  }
+}
+```
+
+Uma coleção Postman com todos os endpoints está em [postman/](postman/).
+
+## 12. Testes automatizados e cobertura
+
+### Ferramentas
+
+- **Vitest**: execução dos testes, mocks (`vi.fn`) e cobertura com `@vitest/coverage-v8`.
+- **Supertest**: requisições HTTP à aplicação Express nos testes de integração, sem abrir porta.
+- **PostgreSQL real** nos testes de integração, em um banco temporário criado só para a execução.
+
+### Organização
+
+| Pasta / arquivo | Conteúdo |
+| --- | --- |
+| `tests/unit/services/` | Regras de negócio dos serviços de veículos, planos, entregas, empresas e API Keys, e do objeto `Coordinate`. Os repositórios são substituídos por mocks (`vi.fn`), sem banco. |
+| `tests/unit/*.test.ts` | Autenticação por API Key, algoritmo de otimização, provedor Google com `fetch` simulado, simulação de jornada de entregas, rate limit, tratamento de erros HTTP e repositório de contas. |
+| `tests/integration/vehicles.test.ts` | CRUD completo de veículos via HTTP: códigos de status, dados retornados, validações, nome duplicado e autenticação. |
+| `tests/integration/route-plans.test.ts` | CRUD completo de planos: coordenada inválida, isolamento entre empresas, versão e exclusão. |
+| `tests/integration/deliveries.test.ts` | CRUD completo de entregas: referência duplicada, entrega no depósito, plano inexistente, volta do plano para `draft` e exclusão em cascata. |
+| `tests/integration/accounts.test.ts` | CRUD de empresas e emissão, uso, listagem e revogação de API Keys. |
+| `tests/integration/routing.test.ts` | Fluxo completo com otimização (Google simulado), isolamento entre empresas e concorrência. |
+| `tests/integration/redis.test.ts` | Contador atômico do rate limit no Redis. |
+| `tests/integration/docs.test.ts` | Swagger UI, especificação OpenAPI, health check e rota inexistente. |
+| `tests/support/` | Fábricas de entidades, mocks de repositórios e utilitários de integração. |
+
+### Como executar
+
+Prepare o ambiente uma vez:
 
 ```sh
 npm install
 cp .env.example .env
-npx prisma generate
-npx prisma migrate deploy
-npm run dev
-```
-
-Configure `DATABASE_URL`, `ADMIN_API_KEY` e `GOOGLE_MAPS_API_KEY` no `.env`. Gere uma credencial administrativa aleatória de pelo menos 32 caracteres; os valores de exemplo devem ser substituídos. Habilite a **Routes API** e o faturamento no projeto Google Cloud e restrinja a chave à API e ao ambiente do servidor.
-
-| Variável | Uso |
-| --- | --- |
-| `ADMIN_API_KEY` | Credencial administrativa para os endpoints existentes de accounts e api-keys. Sem configuração, esses endpoints recusam acesso. |
-| `GOOGLE_MAPS_API_KEY` | Credencial do Google Routes. Sem configuração, otimizar retorna `503 MAPS_NOT_CONFIGURED`; os cadastros continuam disponíveis. |
-| `GOOGLE_MAPS_TIMEOUT_MS` | Timeout por lote da matriz; padrão: 10000 ms. |
-| `ROUTING_MAX_DELIVERIES` | Máximo de entregas por otimização; padrão: 100, configurável entre 1 e 500. |
-
-## Autenticação e autorização
-
-- Administração: envie `X-Admin-Key` para `/v1/accounts` e `/v1/accounts/:accountId/api-keys`. Isso permite provisionar a primeira conta e sua chave sem expor criação de credenciais publicamente. Os contratos desses endpoints foram preservados; a autenticação administrativa é obrigatória.
-- Roteirização: envie a chave completa em `X-API-Key`. A chave é retornada apenas na criação; o banco armazena seu hash SHA-256. As chaves emitidas atualmente usam o formato `lgfy_test_` seguido de 64 caracteres hexadecimais.
-- Leituras exigem `routing:read`; criação, alteração, exclusão e otimização exigem `routing:write`. Um scope não implica o outro.
-- Chaves desconhecidas, expiradas ou revogadas, e contas suspensas, inativas ou excluídas, recebem `401`. Scope insuficiente recebe `403`. Identificadores de outra empresa recebem `404`.
-- A requisição atualiza `lastUsedAt` após autenticação. Os headers de credenciais são ocultados dos logs.
-- `GET /v1/health` permanece público.
-
-## Endpoints de roteirização
-
-Todos os caminhos abaixo são relativos a `/v1`.
-
-| Método | Caminho | Operação |
-| --- | --- | --- |
-| POST | `/route-plans` | Criar plano e depósito |
-| GET | `/route-plans` | Listar planos da conta |
-| GET | `/route-plans/:id` | Consultar plano |
-| PATCH | `/route-plans/:id` | Alterar nome ou depósito |
-| DELETE | `/route-plans/:id` | Excluir plano, entregas e resultado |
-| POST | `/route-plans/:routePlanId/deliveries` | Adicionar entrega |
-| GET | `/route-plans/:routePlanId/deliveries` | Listar entregas do plano |
-| GET | `/route-plans/:routePlanId/deliveries/:id` | Consultar entrega |
-| PATCH | `/route-plans/:routePlanId/deliveries/:id` | Alterar entrega |
-| DELETE | `/route-plans/:routePlanId/deliveries/:id` | Excluir entrega |
-| POST | `/vehicles` | Cadastrar veículo |
-| GET | `/vehicles` | Listar veículos da conta |
-| GET | `/vehicles/:id` | Consultar veículo |
-| PATCH | `/vehicles/:id` | Alterar veículo |
-| DELETE | `/vehicles/:id` | Excluir veículo |
-| POST | `/route-plans/:id/optimize` | Calcular e persistir otimização |
-| GET | `/route-plans/:id/optimization` | Consultar último resultado válido |
-
-Listagens aceitam `page` e `limit` (padrões 1 e 20, limite máximo 100), retornando `{ data, pagination: { page, limit, total, totalPages } }`. Criações retornam `201`, consultas, alterações e otimização `200`, exclusões `204`. Outros resultados usam `{ data }` e erros mantêm o envelope `{ error: { code, message, details, request_id } }` existente.
-
-### Exemplo de uso
-
-Crie uma conta com `X-Admin-Key`:
-
-```http
-POST /v1/accounts
-Content-Type: application/json
-X-Admin-Key: SUA_CREDENCIAL_ADMINISTRATIVA
-
-{"name":"Transportadora","slug":"transportadora"}
-```
-
-Use o `id` retornado para emitir uma chave:
-
-```http
-POST /v1/accounts/ACCOUNT_ID/api-keys
-Content-Type: application/json
-X-Admin-Key: SUA_CREDENCIAL_ADMINISTRATIVA
-
-{"name":"Roteirizacao","scopes":["routing:read","routing:write"]}
-```
-
-Envie `data.key` como `X-API-Key` nas próximas chamadas:
-
-```http
-POST /v1/vehicles
-Content-Type: application/json
-X-API-Key: SUA_API_KEY
-
-{"name":"Van 01","capacity":100}
-```
-
-```http
-POST /v1/route-plans
-Content-Type: application/json
-X-API-Key: SUA_API_KEY
-
-{"name":"Rota da manhã","depotLatitude":-23.5505,"depotLongitude":-46.6333}
-```
-
-```http
-POST /v1/route-plans/PLAN_ID/deliveries
-Content-Type: application/json
-X-API-Key: SUA_API_KEY
-
-{"reference":"PEDIDO-001","latitude":-23.5614,"longitude":-46.6559,"demand":10,"serviceDurationSeconds":300}
-```
-
-```http
-POST /v1/route-plans/PLAN_ID/optimize
-Content-Type: application/json
-X-API-Key: SUA_API_KEY
-
-{"vehicleIds":["VEHICLE_ID"],"fuelConsumptionKmPerLiter":10}
-```
-
-`PLAN_ID`, `VEHICLE_ID` e `ACCOUNT_ID` representam os CUIDs retornados pela API. `accountId` não é aceito nos corpos de roteirização. Latitude deve estar entre -90 e 90; longitude entre -180 e 180. `capacity` e `demand` são inteiros positivos na mesma unidade definida pela empresa. `active` é `true` por padrão; `serviceDurationSeconds` é 0 por padrão e aceita até 86400 segundos. A referência da entrega é única dentro do plano. Campos desconhecidos e patches vazios são rejeitados com `422`.
-
-## Matriz e otimização
-
-O adaptador Google chama [computeRouteMatrix](https://developers.google.com/maps/documentation/routes/reference/rest/v2/TopLevel/computeRouteMatrix) com `DRIVE` e `TRAFFIC_UNAWARE`. As distâncias são viárias, em metros, e as durações são em segundos. Não há estimativa por linha reta nem fallback fictício. As coordenadas devem ser fornecidas; esta fase não faz geocodificação de endereços.
-
-A matriz inclui o depósito e todas as entregas. Lotes de até 25 origens por 25 destinos respeitam o máximo de 625 elementos por chamada. A resposta é reconstruída pelos índices; pares sem rota são inacessíveis. Respostas incompletas, duplicadas ou inválidas causam `502`; timeout causa `504`. A quantidade de elementos cresce quadraticamente e as chamadas podem gerar cobrança no Google. A otimização é síncrona, sem tráfego em tempo real.
-
-A engine `capacity-cheapest-insertion-v1` ordena entregas por demanda e escolhe a inserção com menor acréscimo de tempo de viagem entre os veículos com capacidade disponível. Considera a matriz direcionada, o tempo de serviço e o retorno ao depósito. Cada entrega é visitada uma vez, sem divisão de carga. Veículos não utilizados são omitidos do resultado. A engine é uma heurística: não garante o ótimo global e pode não encontrar uma distribuição mesmo quando outra combinação seria possível. Nesse caso retorna `422 OPTIMIZATION_INCOMPLETE`, sem salvar uma solução parcial. Não há janelas de atendimento, múltiplos depósitos ou turnos nesta fase.
-
-O resultado inclui o algoritmo, o provedor da matriz, o depósito, os veículos usados, a carga, as paradas ordenadas, o deslocamento de cada trecho, os segundos decorridos até a chegada, o retorno ao depósito e os totais de distância e duração. A duração total soma deslocamentos, serviços e retornos de todos os veículos; não representa a duração paralela da operação inteira.
-
-## Persistência e concorrência
-
-`RoutePlan`, `Delivery`, `Vehicle` e `RouteOptimization` possuem identificação da conta. As relações compostas de entregas e resultados com o plano também garantem essa associação no PostgreSQL.
-
-O resultado é armazenado em JSONB com snapshots das informações usadas nas rotas. Há um resultado por plano. Otimizar novamente substitui o anterior em uma transação e muda o status para `optimized`. Uma falha de cálculo preserva o resultado anterior.
-
-Alterar o plano ou criar, alterar ou excluir entregas invalida o resultado e retorna o plano para `draft`, na mesma transação. O salvamento verifica a versão do plano e a última alteração dos veículos; alterações concorrentes retornam `409 CONCURRENT_MODIFICATION`. Chamadas ao Google acontecem fora das transações do banco.
-
-Alterações posteriores no cadastro de veículos preservam o resultado como snapshot da otimização já realizada. Para usar os novos dados, otimize novamente. Exclusões de planos, entregas e veículos são definitivas; excluir um plano remove suas entregas e seu resultado em cascata.
-
-## Arquitetura
-
-Os módulos `route-plans`, `deliveries` e `vehicles` seguem a separação existente entre entidades e contratos de repositório, DTOs e casos de uso, repositórios Prisma, schemas Zod, controllers e rotas HTTP. A composição manual fica em `src/shared/container`.
-
-O módulo `routing` concentra a orquestração e os contratos `DistanceMatrixProvider` e `RouteOptimizer`. Os adaptadores atuais são `GoogleMapsDistanceMatrixProvider` e `CheapestInsertionOptimizer`. Para trocar o provedor ou algoritmo, implemente o respectivo contrato e altere a composição em `routing.container.ts`. Controllers e entidades não dependem dos adaptadores.
-
-## Verificação
-
-### Testar pelo Postman
-
-1. Importe a [coleção com os 27 endpoints](postman/logfy.postman_collection.json) e o [ambiente local](postman/local.postman_environment.json).
-2. Selecione o ambiente **Logfy · Local**, ajuste `baseUrl` se necessário (padrão `http://localhost:3000/v1`) e preencha `adminKey` com o mesmo valor de `ADMIN_API_KEY` configurado no servidor.
-3. Com o banco migrado e a API iniciada (`npm run dev`), execute as requisições na ordem das pastas. As criações salvam automaticamente `accountId`, `apiKeyId`, `apiKey`, `vehicleId`, `routePlanId` e `deliveryId` nas variáveis da coleção. Não crie variáveis de ambiente com esses nomes, pois elas sobrepõem os valores capturados.
-4. Cada requisição inclui nome, descrição dos parâmetros, corpo de exemplo quando aplicável e uma verificação do status HTTP esperado. Para repetir o fluxo, comece pela criação da conta; um slug novo é gerado a cada execução.
-
-A pasta **07 · Otimização** exige a configuração do Google Maps descrita acima e faz chamadas reais, sujeitas a cobrança. Sem essa configuração, pule essa pasta; os testes de status dela não passarão. Execute a pasta **08 · Limpeza** somente ao terminar: ela exclui os recursos de teste, revoga a chave e faz a exclusão lógica da conta. O Collection Runner executa também essas pastas se estiverem selecionadas.
-
-As credenciais ficam vazias nos arquivos de importação. A chave da conta é retornada somente na criação e fica armazenada localmente pelo Postman; remova os valores antes de compartilhar uma exportação.
-
-### Testes automatizados
-
-Os testes usam o executor nativo do Node.js (`node:test`), as asserções de `node:assert/strict` e o `tsx` para executar TypeScript. Execute os comandos abaixo na raiz do projeto.
-
-#### Preparar o ambiente
-
-Instale as dependências e gere o cliente Prisma:
-
-```sh
-npm ci
-# Copie apenas se ainda não existir um .env, preservando sua configuração.
-cp -n .env.example .env
+docker compose up -d --wait
 npx prisma generate
 ```
 
-O `.env` precisa conter `DATABASE_URL` mesmo para os testes com banco simulado, pois alguns módulos inicializam o cliente Prisma ao serem importados. A suíte padrão não exige PostgreSQL ou Redis em execução, migrations aplicadas nem uma chave real do Google. Os testes HTTP iniciam e encerram seus próprios servidores em portas locais disponíveis; não é necessário executar `npm run dev`.
-
-#### Executar a suíte padrão
-
-```sh
-npm test
-```
-
-Esse comando executa somente `tests/*.test.ts`; os arquivos em `tests/integration/` ficam fora dele. Repositórios, respostas do Google e armazenamento do rate limit são substituídos por implementações controladas em memória (mocks), conforme o teste.
-
-Para executar apenas um arquivo ou filtrar um cenário pelo nome:
-
-```sh
-npx tsx --test tests/delivery-simulation.test.ts
-npx tsx --test tests/routing-optimizer.test.ts
-npx tsx --test --test-name-pattern="otimiza a jornada" tests/delivery-simulation.test.ts
-```
-
-Na saída, cada cenário aparece como aprovado (`ok`/✔) ou reprovado (`not ok`/✖), dependendo do formato do relatório. Uma falha mostra a asserção e a localização no código; o processo termina com código diferente de zero. As mensagens emitidas por `t.diagnostic`, como os eventos da jornada da Ana, são informações adicionais e não representam falhas.
-
-#### O que cada arquivo testa
-
-| Arquivo | Cenários verificados |
-| --- | --- |
-| [accounts-list.test.ts](tests/accounts-list.test.ts) | Listagem HTTP de contas com Prisma simulado: filtros `deleted=false`, `deleted=true` e `deleted=all`, paginação, página sem resultados e ordenação por criação e ID decrescentes. Confirma que a consulta padrão inclui contas excluídas e que parâmetros inválidos retornam `422` antes de consultar o repositório. |
-| [api-key-authentication.test.ts](tests/api-key-authentication.test.ts) | Autenticação consulta apenas o hash SHA-256, retorna conta, ID da chave e scopes sem credenciais, e registra o uso da chave válida. Rejeita chave desconhecida, revogada ou expirada e conta suspensa, inativa ou excluída sem registrar uso. Chaves malformadas são rejeitadas antes de consultar o repositório. |
-| [prisma-account.repository.test.ts](tests/prisma-account.repository.test.ts) | Quatro cenários com erros Prisma simulados: em `create` e `update`, conflito de unicidade (`P2002`) vira `409`, com os códigos `ACCOUNT_ALREADY_EXISTS` e `ACCOUNT_SLUG_ALREADY_EXISTS`, respectivamente; em ambas as operações, erros inesperados são propagados sem substituição. |
-| [http-security.test.ts](tests/http-security.test.ts) | Três cenários HTTP: excesso de requisições retorna `429`, com headers de limite, sem permitir contorno por `X-Forwarded-For` forjado; falha no armazenamento do limite retorna `503` sem expor detalhes internos; JSON inválido e corpo grande retornam `400` e `413` com código de erro e identificação da requisição. |
-| [google-maps-matrix.test.ts](tests/google-maps-matrix.test.ts) | Com `fetch` simulado, aceita distâncias zero omitidas, reorganiza índices fora de ordem, interpreta segundos decimais e representa trechos inacessíveis. Confere a divisão de 26 pontos em quatro lotes de até 625 elementos. Rejeita células ausentes ou duplicadas, índice fora dos limites, erro em elemento, duração ausente ou inválida e formato JSON incorreto. Verifica ausência de configuração (`503`), falha HTTP do provedor (`502`, sem expor a chave) e timeout (`504`). |
-| [routing-optimizer.test.ts](tests/routing-optimizer.test.ts) | Cinco cenários: custos diferentes por sentido, atendimento e retorno ao depósito; cada entrega atribuída uma única vez respeitando a capacidade dos veículos; recusa de solução parcial para entregas inacessíveis ou capacidade insuficiente; recusa de matriz com dimensões inválidas ou custos negativos; validações do caso de uso antes de chamar o provedor, rejeição de veículos duplicados e ausência de salvamento quando o cálculo falha. |
-| [delivery-simulation.test.ts](tests/delivery-simulation.test.ts) | Três cenários com dados locais: criação de planos e entregas, jornada na ordem de cadastro e comparação com a jornada otimizada. Os resultados e os logs estão detalhados abaixo. |
-
-#### Simulação de entregas: jornada da Ana
-
-O arquivo `delivery-simulation.test.ts` executa os casos de uso reais com repositórios e matriz de distâncias simulados:
-
-1. **Cria várias rotas com entregas vinculadas à conta e ao plano correto:** cria três planos (Norte, Sul e Centro), com quatro entregas cada. Verifica IDs distintos, status inicial `draft`, vínculo com a conta e o plano e os argumentos enviados aos repositórios.
-2. **Simula Ana fazendo entregas na ordem de cadastro com logs de cada etapa:** percorre três entregas sem reordená-las e confere a sequência de saída, chegada, conclusão e retorno ao depósito. Valida os tempos acumulados, a distância e o horário final da simulação.
-3. **Otimiza a jornada de entregas e reduz distância e tempo com logs:** usa o otimizador real, verifica a consulta da matriz e o salvamento do resultado, a capacidade da van, a sequência das paradas e a presença de todas as entregas. Compara os totais e os horários de chegada calculados com a simulação do percurso e estima o consumo de gasolina considerando 10 km/l constantes.
-
-| Medida | Ordem de cadastro | Rota otimizada |
+| Comando | O que executa | Requer banco? |
 | --- | --- | --- |
-| Distância, incluindo retorno | 8 km | 6 km |
-| Tempo, incluindo atendimento e retorno | 980 s (16 min 20 s) | 780 s (13 min) |
-| Gasolina estimada a 10 km/l | 0,80 L | 0,60 L |
+| `npm run test:unit` | Testes unitários | Não |
+| `npm run test:integration` | Testes de integração | PostgreSQL e Redis |
+| `npm test` | Unitários e depois integração | PostgreSQL e Redis |
+| `npm run test:coverage` | Todos os testes com relatório de cobertura | PostgreSQL e Redis |
+| `npm run test:watch` | Unitários em modo observação | Não |
 
-Nesse cenário, a economia é de 2 km, 200 segundos (20,41%) e 0,20 L (25%). São valores definidos pela matriz fictícia do teste, não medições do Google ou garantia de economia em rotas reais. A estimativa de combustível é calculada pelo próprio teste.
+O relatório de cobertura é gerado em `coverage/` (abra `coverage/index.html` no navegador; o resumo também aparece no terminal e em `coverage/coverage-summary.json`). O Vitest falha se qualquer métrica ficar abaixo de 60%.
 
-Os logs incluem `event`, `driver`, `deliveryId` quando aplicável, `elapsed` (segundos acumulados) e `timestamp` (horário simulado). O tempo avança por cálculo, sem esperar os minutos da jornada transcorrerem.
+### Cobertura alcançada
 
-#### Executar os testes de integração
+Medida sobre todo o código em `src/` (nenhuma camada foi excluída do relatório):
 
-Com Docker e Docker Compose disponíveis, inicie as dependências locais e aguarde ficarem prontas:
+| Métrica | Cobertura | Mínimo exigido |
+| --- | --- | --- |
+| Instruções (statements) | **91,34%** | 60% |
+| Ramificações (branches) | **88,21%** | 60% |
+| Funções | **92,30%** | 60% |
+| Linhas | **91,96%** | 60% |
 
-```sh
-docker compose up -d --wait postgres redis
-npm run test:integration
-```
+Total: 139 testes (92 unitários e 47 de integração), todos aprovados.
 
-Configure `DATABASE_URL` e `REDIS_URL` no `.env` para apontar para essas instâncias; os valores de `.env.example` correspondem ao Compose. Também é possível usar instâncias de teste já disponíveis. O banco indicado por `DATABASE_URL` deve existir e seu usuário PostgreSQL precisa de permissão para criar bancos (`CREATEDB` ou equivalente).
+### Cuidados com o banco de testes
 
-O script [tests/run-integration.ts](tests/run-integration.ts) carrega o `.env`, cria um banco `logfy_test_<valor aleatório>` no mesmo servidor, aplica todas as migrations e executa os dois arquivos abaixo. Ele define `NODE_ENV=test`, gera uma chave administrativa temporária e remove o banco em um bloco `finally`, inclusive quando um teste falha. Uma interrupção forçada do processo pode impedir essa limpeza. As tabelas do banco da aplicação não são usadas pelos testes.
+- `tests/run-integration.ts` cria um banco novo `logfy_test_<aleatório>` no servidor de `DATABASE_URL`, aplica todas as migrations, executa os testes e **apaga o banco ao final**, mesmo se algum teste falhar. O banco de desenvolvimento nunca é alterado.
+- Os testes de integração recusam rodar fora desse banco temporário, evitando apagar dados reais por engano.
+- O usuário do PostgreSQL precisa de permissão para criar bancos (`CREATEDB`); o usuário do `docker-compose.yml` já possui.
+- Cada arquivo cria empresas com slug aleatório e as remove no `afterAll` (a exclusão em cascata limpa veículos, planos e entregas), então os testes podem ser executados repetidamente sem interferência.
+- Os arquivos de integração rodam em sequência (`fileParallelism: false`).
+- Nenhum teste chama o Google Maps; o provedor é simulado.
 
-| Arquivo | Cenários verificados |
-| --- | --- |
-| [integration/routing.test.ts](tests/integration/routing.test.ts) | Um fluxo integrado com HTTP, PostgreSQL e Redis reais: saúde pública, autenticação administrativa e por API Key, restrição de scopes, isolamento entre duas contas, cadastros e alterações de planos, entregas e veículos, validação de parâmetros e conflitos. Verifica persistência e substituição da otimização, invalidação após mudanças, proteção contra gravações concorrentes, hash e último uso da chave, rejeição de credenciais/contas inválidas e exclusão em cascata. O provedor Google é simulado. |
-| [integration/redis.test.ts](tests/integration/redis.test.ts) | Dois clientes Redis fazem 30 incrementos concorrentes no mesmo contador. Verifica que cada incremento recebe um número único de 1 a 30, que a janela tem expiração e que o contador reinicia após expirar. Usa uma chave aleatória e tenta removê-la ao finalizar. |
+### Integração contínua
 
-Execute o fluxo de integração pelo script npm: `routing.test.ts` recusa execução direta sem a identificação do banco temporário. Não é necessário iniciar a API separadamente nem configurar uma chave real do Google; não há chamadas externas ao Google ou consumo de crédito nesses testes. O Redis usado é o indicado por `REDIS_URL`, com chaves de teste; o script não cria uma instância Redis separada.
+O workflow [.github/workflows/ci.yml](.github/workflows/ci.yml) sobe PostgreSQL e Redis, executa `typecheck`, `build` e `test:coverage` a cada push na `main` e em pull requests, e publica o relatório de cobertura como artefato.
 
-Se houver erro de conexão, confira `docker compose ps` e as URLs do `.env`. Erro de permissão em `CREATE DATABASE` exige ajustar o usuário do PostgreSQL. Se o fluxo HTTP retornar `429`, confira `RATE_LIMIT_MAX`: a integração herda essa configuração e o padrão do projeto é 120.
+## 13. Documentação Swagger
 
-#### Verificações complementares
+Com a aplicação rodando (`npm run dev`), acesse:
 
-```sh
-npm run typecheck
-npm run build
-```
+- **Swagger UI:** http://localhost:3000/api-docs
+- **Especificação em JSON:** http://localhost:3000/api-docs.json
 
-`typecheck` verifica os tipos sem gerar arquivos; `build` compila a aplicação em `dist/`. Esses comandos complementam as suítes, mas não executam testes.
+Na interface, os endpoints estão agrupados por entidade (Vehicles, Route Plans, Deliveries, Routing, Accounts, API Keys, Health). Cada operação mostra a finalidade, os parâmetros de rota e de consulta, o formato do corpo com exemplo, as respostas e os códigos HTTP.
+
+Para testar pela própria página:
+
+1. Clique em **Authorize**.
+2. Informe a API Key em `ApiKeyAuth` (para veículos, planos, entregas e otimização) e/ou a credencial administrativa em `AdminKeyAuth` (para empresas e chaves).
+3. Abra um endpoint, clique em **Try it out**, ajuste o exemplo e clique em **Execute**.
+
+## Informações complementares
+
+### Otimização de rotas
+
+A matriz de distâncias vem da [Google Routes API](https://developers.google.com/maps/documentation/routes/reference/rest/v2/TopLevel/computeRouteMatrix) (`DRIVE`, sem tráfego em tempo real), em lotes de até 25 × 25 pontos. O algoritmo `capacity-cheapest-insertion-v1` distribui as entregas entre os veículos pela menor inserção de tempo, respeitando a capacidade, o tempo de atendimento e o retorno ao depósito. É uma heurística: não garante o ótimo global. Se não encontrar uma distribuição completa, retorna `422 OPTIMIZATION_INCOMPLETE` sem salvar resultado parcial. O resultado traz as paradas em ordem e a comparação de distância, tempo e combustível com a ordem de cadastro.
+
+### Segurança
+
+- Credenciais e segredos ficam apenas em variáveis de ambiente; `.env` está no `.gitignore`.
+- API Keys são armazenadas como hash SHA-256 e a credencial administrativa é comparada em tempo constante.
+- Headers `X-API-Key` e `X-Admin-Key` são ocultados dos logs.
+- Helmet, CORS restrito por configuração, limite de 1 MB no corpo e rate limit distribuído por IP no Redis (`429` com `Retry-After`).
 
 ### Teste de carga
 
-Os scripts em `scripts/` exigem uma API em execução, com PostgreSQL e Redis, e uma chave com `routing:read` em `LOAD_API_KEY`. Eles chamam somente rotas de leitura (`/v1/vehicles` e `/v1/route-plans`, ajustáveis em `LOAD_PATHS`), sem chamadas ao Google. Rode-os apenas contra ambientes que você controla.
-
-**Antes de medir capacidade, suba o limite por IP na API de teste.** Com o padrão `RATE_LIMIT_MAX=120` por minuto, todas as requisições depois da 120ª retornam `429` e o resultado mostra apenas o rate limit. Defina um valor alto no `.env` (por exemplo `RATE_LIMIT_MAX=10000000`), reinicie a API e, se o contador ainda estiver cheio, aguarde `RATE_LIMIT_WINDOW_MS` ou reinicie o Redis. Restaure o valor original depois do teste.
-
-`scripts/load-test-rps.mjs` executa etapas com taxa fixa, independentemente da velocidade das respostas (modelo *open-loop*), e compara todas ao final. O padrão é 100, 200, 300 e 5000 req/s, 30 s cada:
+`scripts/load-test-rps.mjs` (taxa fixa) e `scripts/load-test.mjs` (concorrência fixa) medem o desempenho das rotas de leitura. Exigem a API em execução e `LOAD_API_KEY` com `routing:read`. Antes de medir, aumente `RATE_LIMIT_MAX`, senão o resultado mostrará apenas respostas `429`:
 
 ```sh
 LOAD_API_KEY='lgfy_test_...' node scripts/load-test-rps.mjs
-
-LOAD_API_KEY='lgfy_test_...' RATES=500,1000 STAGE_SECONDS=60 RESULT_FILE=resultado.json node scripts/load-test-rps.mjs
+LOAD_API_KEY='lgfy_test_...' RATES=500,1000 STAGE_SECONDS=60 node scripts/load-test-rps.mjs
 ```
-
-| Variável | Padrão | Uso |
-| --- | --- | --- |
-| `BASE_URL` | `http://127.0.0.1:3000` | Origem da API. |
-| `RATES` | `100,200,300,5000` | Taxas alvo em req/s, separadas por vírgula. |
-| `STAGE_SECONDS` | `30` | Duração de cada etapa. |
-| `COOLDOWN_SECONDS` | `5` | Pausa entre etapas. |
-| `TIMEOUT_MS` | `10000` | Timeout por requisição; excedido, conta como erro de rede (`timeout`). |
-| `MAX_INFLIGHT` | `1000` | Máximo de requisições simultâneas do gerador. |
-| `MAX_P95_MS` | `1000` | Limite de p95 para aprovar a etapa. |
-| `MAX_ERROR_RATE` | `0.01` | Taxa máxima de erros para aprovar a etapa. |
-| `MAX_DROPPED_RATE` | `0.05` | Máximo de requisições descartadas para aprovar a etapa. |
-| `RESULT_FILE` | vazio | Grava o resultado completo em JSON neste arquivo. |
-
-Durante a etapa, uma linha a cada 5 s mostra `enviadas`, `erros`, `descartadas` e `em_voo`. `em_voo` são as requisições enviadas que ainda aguardam resposta; um valor que só cresce indica que a API não acompanha a taxa. `descartadas` são requisições que o gerador deveria enviar, mas não enviou por atingir `MAX_INFLIGHT`; não são erros da API, e sim taxa abaixo do alvo.
-
-O resultado final é uma tabela com uma linha por taxa:
-
-| Coluna | Significado |
-| --- | --- |
-| `alvo req/s` | Taxa configurada para a etapa. |
-| `enviadas/s`, `200/s` | Requisições enviadas e respondidas com HTTP 200 por segundo. |
-| `erros` | Porcentagem de respostas diferentes de 200 e falhas de rede sobre as enviadas. |
-| `429`, `5xx`, `rede` | `429` indica rate limit; `5xx` inclui `503` quando o Redis falha; `rede` reúne timeouts, `ECONNRESET` e semelhantes. |
-| `p50`, `p95`, `p99`, `máx` | Latência em ms, apenas das respostas 200. Respostas `429` são rápidas e mascarariam a lentidão real. |
-| `descartadas` | Requisições não enviadas por `MAX_INFLIGHT`. |
-| `resultado` | `OK` ou `FALHOU`, com o motivo listado abaixo da tabela, junto da maior taxa aprovada. |
-
-O código de saída é `0` se todas as etapas passarem, `1` se alguma falhar e `130` se interrompido com Ctrl+C. O script avisa no início quando o limite da API é menor que o total de requisições planejado.
-
-A taxa de 5000 req/s roda em um único processo Node e disputa CPU com a API se estiverem na mesma máquina; o script avisa quando o agendamento atrasa mais de 100 ms. Para medir esse valor com confiança, execute o gerador em outra máquina. O limite de arquivos abertos (`ulimit -n`) precisa ser maior que `MAX_INFLIGHT`.
-
-`scripts/load-test.mjs` usa outro modelo (*closed-loop*): `CONCURRENCY` workers repetem requisições em sequência, então a taxa depende da velocidade da API. Aceita `BASE_URL`, `LOAD_API_KEY`, `LOAD_PATHS`, `CONCURRENCY` (padrão 20), `DURATION_SECONDS` (60), `RAMP_SECONDS` (10), `TIMEOUT_MS`, `MAX_P95_MS` e `MAX_ERROR_RATE`, e imprime um único resumo JSON. Use-o para medir quanto a API sustenta com uma concorrência fixa; use `load-test-rps.mjs` para verificar se ela aguenta uma taxa específica.
-
-## Redis e proteção HTTP
-
-Execute `docker compose up -d` antes de iniciar a API. `REDIS_URL` usa `redis://127.0.0.1:6379` por padrão. PostgreSQL e Redis são publicados somente na interface local pelo Compose. Em produção, configure Redis em rede privada com autenticação e TLS (`rediss://`).
-
-O limite distribuído por IP usa uma janela fixa atômica no Redis: `RATE_LIMIT_MAX=120` e `RATE_LIMIT_WINDOW_MS=60000`. Requisições excedentes recebem HTTP 429 e `Retry-After`; indisponibilidade do Redis bloqueia as rotas de negócio com HTTP 503. O contador e sua expiração são atualizados pelo mesmo script Lua, conforme a [documentação do Redis](https://redis.io/docs/latest/commands/incr/). O limite vale por IP e é baixo por padrão; testes de carga o esgotam em segundos (veja [Teste de carga](#teste-de-carga)).
-
-`CORS_ORIGINS` aceita origens separadas por vírgula. Vazio desabilita o acesso entre origens pelo navegador. `TRUST_PROXY` aceita endereços ou sub-redes dos proxies confiáveis separados por vírgula; vazio usa o endereço da conexão. Configure apenas proxies controlados que substituam os cabeçalhos encaminhados.
-
-`GET /v1/health` verifica o processo; `GET /v1/health/ready` verifica PostgreSQL e Redis e retorna 503 se alguma dependência falhar. Esses endpoints não consomem o limite. A inicialização exige as duas dependências, e SIGINT/SIGTERM drenam requisições e encerram conexões com prazo de dez segundos.
