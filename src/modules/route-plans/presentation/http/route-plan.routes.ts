@@ -9,6 +9,7 @@ import { SCOPES } from '../../../../shared/auth/scopes';
 import {
   createRoutePlanSchema,
   updateRoutePlanSchema,
+  replaceRoutePlanSchema,
   getRoutePlanSchema,
   listRoutePlanSchema,
 } from './route-plan.schemas';
@@ -34,6 +35,13 @@ routePlanRouter.get(
   requireScopes(SCOPES.ROUTING_READ),
   validate(getRoutePlanSchema),
   routePlanController.show,
+);
+
+routePlanRouter.put(
+  '/:id',
+  requireScopes(SCOPES.ROUTING_WRITE),
+  validate(replaceRoutePlanSchema),
+  routePlanController.update,
 );
 
 routePlanRouter.patch(

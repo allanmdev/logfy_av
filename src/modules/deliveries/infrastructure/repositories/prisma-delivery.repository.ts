@@ -103,6 +103,21 @@ export class PrismaDeliveryRepository implements DeliveryRepository {
     return record ? this.toDomain(record) : null;
   }
 
+  async findByReference(
+    accountId: string,
+    routePlanId: string,
+    reference: string,
+  ): Promise<Delivery | null> {
+    const record = await prisma.delivery.findFirst({
+      where: { accountId, routePlanId, reference },
+    });
+    return record ? this.toDomain(record) : null;
+  }
+
+  async countByRoutePlan(accountId: string, routePlanId: string) {
+    return prisma.delivery.count({ where: { accountId, routePlanId } });
+  }
+
   async findMany(accountId: string, routePlanId: string, options: Pagination) {
     const parent = await prisma.routePlan.findFirst({
       where: { id: routePlanId, accountId },

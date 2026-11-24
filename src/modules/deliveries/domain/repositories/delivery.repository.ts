@@ -22,6 +22,12 @@ export interface DeliveryRepository {
     routePlanId: string,
     id: string,
   ): Promise<Delivery | null>;
+  findByReference(
+    accountId: string,
+    routePlanId: string,
+    reference: string,
+  ): Promise<Delivery | null>;
+  countByRoutePlan(accountId: string, routePlanId: string): Promise<number>;
   findMany(
     accountId: string,
     routePlanId: string,

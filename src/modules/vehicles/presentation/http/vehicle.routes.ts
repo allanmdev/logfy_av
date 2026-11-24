@@ -6,6 +6,7 @@ import { SCOPES } from '../../../../shared/auth/scopes';
 import {
   createVehicleSchema,
   updateVehicleSchema,
+  replaceVehicleSchema,
   getVehicleSchema,
   listVehicleSchema,
 } from './vehicle.schemas';
@@ -31,6 +32,13 @@ vehicleRouter.get(
   requireScopes(SCOPES.ROUTING_READ),
   validate(getVehicleSchema),
   vehicleController.show,
+);
+
+vehicleRouter.put(
+  '/:id',
+  requireScopes(SCOPES.ROUTING_WRITE),
+  validate(replaceVehicleSchema),
+  vehicleController.update,
 );
 
 vehicleRouter.patch(

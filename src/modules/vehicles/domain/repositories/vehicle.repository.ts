@@ -12,6 +12,7 @@ export type UpdateVehicleData = Partial<CreateVehicleData>;
 export interface VehicleRepository {
   create(accountId: string, data: CreateVehicleData): Promise<Vehicle>;
   findById(accountId: string, id: string): Promise<Vehicle | null>;
+  findByName(accountId: string, name: string): Promise<Vehicle | null>;
   findMany(accountId: string, options: Pagination): Promise<Page<Vehicle>>;
   update(
     accountId: string,

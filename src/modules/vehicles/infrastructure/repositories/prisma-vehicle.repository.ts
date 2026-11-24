@@ -51,6 +51,13 @@ export class PrismaVehicleRepository implements VehicleRepository {
     return record ? this.toDomain(record) : null;
   }
 
+  async findByName(accountId: string, name: string): Promise<Vehicle | null> {
+    const record = await prisma.vehicle.findFirst({
+      where: { accountId, name: { equals: name, mode: 'insensitive' } },
+    });
+    return record ? this.toDomain(record) : null;
+  }
+
   async findMany(accountId: string, options: Pagination) {
     const [records, total] = await prisma.$transaction(
       [
