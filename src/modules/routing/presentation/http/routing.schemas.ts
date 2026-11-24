@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 export const optimizeRoutePlanSchema = z.object({
-  params: z.object({ id: z.string().cuid() }),
+  params: z.object({ id: z.uuid() }),
   body: z
     .object({
       vehicleIds: z
-        .array(z.string().cuid())
+        .array(z.uuid())
         .min(1)
         .max(100)
         .refine((ids) => new Set(ids).size === ids.length, {

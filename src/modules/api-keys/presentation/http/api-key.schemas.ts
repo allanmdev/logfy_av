@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SCOPES } from '../../../../shared/auth/scopes';
 
 const accountIdParams = z.object({
-  accountId: z.string().cuid(),
+  accountId: z.uuid(),
 });
 
 export const createApiKeySchema = z.object({
@@ -40,6 +40,6 @@ export const listApiKeysSchema = z.object({
 
 export const revokeApiKeySchema = z.object({
   params: accountIdParams.extend({
-    apiKeyId: z.string().cuid(),
+    apiKeyId: z.uuid(),
   }),
 });

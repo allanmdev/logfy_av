@@ -13,7 +13,7 @@ enum AccountStatus {
 }
 
 model Account {
-  id     String        @id @default(cuid())
+  id     String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name   String
   slug   String        @unique
   status AccountStatus @default(ACTIVE)
@@ -31,9 +31,9 @@ model Account {
 }
 
 model ApiKey {
-  id String @id @default(cuid())
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  accountId String
+  accountId String  @db.Uuid
   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   name String
@@ -62,8 +62,8 @@ enum RoutePlanStatus {
 }
 
 model RoutePlan {
-  id             String             @id @default(cuid())
-  accountId      String
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId      String             @db.Uuid
   account        Account            @relation(fields: [accountId], references: [id], onDelete: Cascade)
   name           String
   depotLatitude  Float
@@ -81,9 +81,9 @@ model RoutePlan {
 }
 
 model Delivery {
-  id                     String    @id @default(cuid())
-  accountId              String
-  routePlanId            String
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId              String    @db.Uuid
+  routePlanId            String    @db.Uuid
   routePlan              RoutePlan @relation(fields: [routePlanId, accountId], references: [id, accountId], onDelete: Cascade)
   reference              String
   latitude               Float
@@ -99,8 +99,8 @@ model Delivery {
 }
 
 model Vehicle {
-  id        String   @id @default(cuid())
-  accountId String
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId String   @db.Uuid
   account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
   name      String
   capacity  Int
@@ -113,9 +113,9 @@ model Vehicle {
 }
 
 model RouteOptimization {
-  id          String    @id @default(cuid())
-  accountId   String
-  routePlanId String    @unique
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId   String    @db.Uuid
+  routePlanId String    @unique @db.Uuid
   routePlan   RoutePlan @relation(fields: [routePlanId, accountId], references: [id, accountId], onDelete: Cascade)
   result      Json
   createdAt   DateTime  @default(now())

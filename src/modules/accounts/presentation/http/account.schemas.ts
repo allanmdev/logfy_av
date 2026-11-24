@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AccountStatus } from '../../domain/entities/account.entity';
 
 const accountIdParams = z.object({
-  id: z.string().cuid(),
+  id: z.uuid(),
 });
 
 const statusToDomain = {

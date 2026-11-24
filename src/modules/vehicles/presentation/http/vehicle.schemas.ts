@@ -8,9 +8,13 @@ const fields = z
     active: z.boolean(),
   })
   .strict();
-const params = z.object({ id: z.string().cuid() });
+const params = z.object({ id: z.uuid() });
 
 export const createVehicleSchema = z.object({
+  body: fields.extend({ active: z.boolean().default(true) }),
+});
+export const replaceVehicleSchema = z.object({
+  params,
   body: fields.extend({ active: z.boolean().default(true) }),
 });
 export const updateVehicleSchema = z.object({

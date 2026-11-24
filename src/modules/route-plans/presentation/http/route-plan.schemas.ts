@@ -8,9 +8,10 @@ const fields = z
     depotLongitude: z.number().min(-180).max(180),
   })
   .strict();
-const params = z.object({ id: z.string().cuid() });
+const params = z.object({ id: z.uuid() });
 
 export const createRoutePlanSchema = z.object({ body: fields });
+export const replaceRoutePlanSchema = z.object({ params, body: fields });
 export const updateRoutePlanSchema = z.object({
   params,
   body: fields.partial().refine((data) => Object.keys(data).length > 0, {

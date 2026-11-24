@@ -10,17 +10,17 @@ const fields = z
     serviceDurationSeconds: z.number().int().min(0).max(86400),
   })
   .strict();
-const params = z.object({
-  id: z.string().cuid(),
-  routePlanId: z.string().cuid(),
+const fullBody = fields.extend({
+  serviceDurationSeconds: fields.shape.serviceDurationSeconds.default(0),
 });
+const planParams = z.object({ routePlanId: z.uuid() });
+const params = planParams.extend({ id: z.uuid() });
 
 export const createDeliverySchema = z.object({
-  params: z.object({ routePlanId: z.string().cuid() }),
-  body: fields.extend({
-    serviceDurationSeconds: fields.shape.serviceDurationSeconds.default(0),
-  }),
+  params: planParams,
+  body: fullBody,
 });
+export const replaceDeliverySchema = z.object({ params, body: fullBody });
 export const updateDeliverySchema = z.object({
   params,
   body: fields.partial().refine((data) => Object.keys(data).length > 0, {
@@ -29,6 +29,6 @@ export const updateDeliverySchema = z.object({
 });
 export const getDeliverySchema = z.object({ params });
 export const listDeliverySchema = z.object({
-  params: z.object({ routePlanId: z.string().cuid() }),
+  params: planParams,
   query: paginationSchema,
 });
